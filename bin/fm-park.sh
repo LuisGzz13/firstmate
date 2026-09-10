@@ -10,6 +10,13 @@
 # A usage error exits 2. --repo adds a repository outside this home to the
 # scan, repeatable, for a checkout the home does not already know about.
 #
+# A copy of this script that cannot run the WHOLE gate - a library or command
+# one of its conditions depends on is missing - names what is missing and exits
+# 3 without printing a verdict at all. A missing dependency does not make a
+# condition report less, it removes the condition, and a confident answer from a
+# partial run is the worst thing this tool could produce: it reads exactly like
+# a complete one.
+#
 # WHY THIS EXISTS. Consolidating a home means everything durable on this
 # machine has to be reachable from somewhere else afterwards. The eight-point
 # gate that question was first answered by was checked by hand exactly once,
@@ -105,9 +112,14 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 
-# shellcheck source=bin/fm-classify-lib.sh
-# shellcheck disable=SC1091
-. "$SCRIPT_DIR/fm-classify-lib.sh"
+# Guarded, and verified below rather than trusted: a copy of this script run
+# from outside the bin/ it ships in finds no library here, and must not go on to
+# print a verdict that quietly skipped whatever that library owned.
+if [ -r "$SCRIPT_DIR/fm-classify-lib.sh" ]; then
+  # shellcheck source=bin/fm-classify-lib.sh
+  # shellcheck disable=SC1091
+  . "$SCRIPT_DIR/fm-classify-lib.sh" 2>/dev/null || true
+fi
 
 usage() {
   awk '
@@ -136,6 +148,34 @@ done
 
 BLOCKERS=()
 blocker() { BLOCKERS+=("$1"); }
+
+# --- what the verdict depends on --------------------------------------------
+
+# Everything named here owns a whole condition. Ordinary text utilities are not
+# listed: their absence makes a condition fail noisily or report more, while
+# each of these going missing makes a condition silently disappear.
+PARK_MISSING=
+park_missing() { PARK_MISSING="$PARK_MISSING  - $1"$'\n'; }
+
+park_check_requirements() {
+  command -v git >/dev/null 2>&1 \
+    || park_missing "git, which every repository and local-copy check needs"
+  command -v shasum >/dev/null 2>&1 || command -v sha256sum >/dev/null 2>&1 \
+    || park_missing "shasum or sha256sum, which the stranded-material check needs"
+  declare -F scan_open_decisions >/dev/null 2>&1 \
+    || park_missing "$SCRIPT_DIR/fm-classify-lib.sh, which the pending-question check needs"
+  [ -x "$SCRIPT_DIR/fm-crew-state.sh" ] \
+    || park_missing "$SCRIPT_DIR/fm-crew-state.sh, which the validation-run and worker checks need"
+  [ -x "$SCRIPT_DIR/fm-captain-hold.sh" ] \
+    || park_missing "$SCRIPT_DIR/fm-captain-hold.sh, which the pending-question check needs"
+  [ -n "$PARK_MISSING" ] || return 0
+  {
+    printf 'CANNOT CHECK - no verdict was reached, because this copy cannot run the whole check.\n\n'
+    printf '%s' "$PARK_MISSING"
+    printf '\nRun it from the bin/ directory it ships in, where the rest of it sits beside it.\n'
+  } >&2
+  return 1
+}
 
 # --- the carried scope ------------------------------------------------------
 
@@ -561,6 +601,8 @@ check_captain_calls() {
 }
 
 # --- verdict ----------------------------------------------------------------
+
+park_check_requirements || exit 3
 
 check_local_copies
 check_workers

@@ -651,6 +651,79 @@ test_a_resolved_question_does_not_block() {
   pass "a question the captain already answered does not block"
 }
 
+# --- a partial run is never a verdict ---------------------------------------
+
+test_a_copy_that_cannot_run_the_whole_check_prints_no_verdict() {
+  local home out bare rc
+  home=$(make_home partial-copy)
+  park_repo "$home"
+
+  # Copied somewhere on its own, which is how it gets installed by hand. It
+  # finds none of its libraries, so several conditions cannot run at all. The
+  # verdict it would otherwise print reads exactly like a complete one, which
+  # is what makes this the worst failure this tool has.
+  bare="$TMP_ROOT/partial-copy.aux"
+  mkdir -p "$bare"
+  cp "$ROOT/bin/fm-park.sh" "$bare/fm-park.sh"
+  chmod +x "$bare/fm-park.sh"
+
+  rc=0
+  out=$(FM_HOME="$home" "$bare/fm-park.sh" 2>&1) || rc=$?
+  expect_code 3 "$rc" "a copy that cannot run the whole check did not refuse"
+  assert_not_contains "$out" "SAFE" "a partial run reported safe"
+  assert_not_contains "$out" "BLOCKED" "a partial run printed a blocker count"
+  assert_not_contains "$out" "thing(s) to clear" "a partial run printed a verdict"
+  assert_contains "$out" "CANNOT CHECK" "the refusal did not say the check could not run"
+  assert_contains "$out" "fm-classify-lib.sh" "the refusal did not name what is missing"
+
+  # It must still be able to explain itself, or nobody can tell what went wrong.
+  rc=0
+  out=$(FM_HOME="$home" "$bare/fm-park.sh" --help 2>&1) || rc=$?
+  expect_code 0 "$rc" "--help stopped working in a copy missing its libraries"
+  assert_contains "$out" "fm-park.sh" "--help printed nothing useful"
+  pass "a copy that cannot run the whole check refuses instead of printing a verdict"
+}
+
+test_one_missing_library_refuses_the_whole_verdict() {
+  local home out rc
+  home=$(make_home missing-library)
+  park_repo "$home"
+  write_task "$home" alpha-m1
+  set_state "$home" alpha-m1 "state: working · source: pane · harness busy"
+
+  # Everything is present except the one library that owns the pending-question
+  # condition. The other five conditions could still run and would produce a
+  # confident-looking verdict, which is precisely the case that must refuse.
+  rm -f "$home/bin/fm-classify-lib.sh"
+  rc=0
+  out=$(FM_HOME="$home" FM_PARK_TEST_STATES="$home/crew-states" \
+    "$home/bin/fm-park.sh" 2>&1) || rc=$?
+  expect_code 3 "$rc" "a run missing one condition's library did not refuse"
+  assert_not_contains "$out" "SAFE" "a run missing one condition still reported safe"
+  assert_not_contains "$out" "thing(s) to clear" "a run missing one condition still printed a verdict"
+  assert_contains "$out" "fm-classify-lib.sh" "the refusal did not name the missing library"
+  pass "one missing library refuses the whole verdict, not just its own condition"
+}
+
+test_a_missing_worker_read_refuses_rather_than_dropping_its_conditions() {
+  local home out rc
+  home=$(make_home missing-crew-state)
+  park_repo "$home"
+  write_task "$home" alpha-m2
+  set_state "$home" alpha-m2 "state: working · source: pane · harness busy"
+
+  # Without this the validation-run and worker conditions do not report less,
+  # they vanish - and a busy worker would read as an idle home.
+  rm -f "$home/bin/fm-crew-state.sh"
+  rc=0
+  out=$(FM_HOME="$home" FM_PARK_TEST_STATES="$home/crew-states" \
+    "$home/bin/fm-park.sh" 2>&1) || rc=$?
+  expect_code 3 "$rc" "a run that cannot read worker state did not refuse"
+  assert_not_contains "$out" "thing(s) to clear" "a run that cannot read worker state printed a verdict"
+  assert_contains "$out" "fm-crew-state.sh" "the refusal did not name the missing read"
+  pass "a missing worker read refuses rather than dropping its conditions"
+}
+
 # --- reach ------------------------------------------------------------------
 
 test_an_extra_repository_is_scanned_on_request() {
@@ -725,5 +798,8 @@ test_a_recorded_pull_request_is_a_durable_account
 test_an_open_question_with_no_held_task_blocks
 test_an_unprovable_captain_call_is_reported_rather_than_assumed_safe
 test_a_resolved_question_does_not_block
+test_a_copy_that_cannot_run_the_whole_check_prints_no_verdict
+test_one_missing_library_refuses_the_whole_verdict
+test_a_missing_worker_read_refuses_rather_than_dropping_its_conditions
 test_an_extra_repository_is_scanned_on_request
 test_the_check_changes_nothing

@@ -27,6 +27,8 @@ bin/fm-park.sh
 
 Add `--repo <path>`, repeatable, for a repository outside this home the captain also consolidates - his dotfiles, say.
 Exit 0 means safe, 1 means blocked, 2 is a usage error.
+Exit 3 means it refused to answer because that copy cannot run the whole check, and it names what is missing.
+Treat a refusal as no answer at all: never report it as safe, and never pass on the conditions it did manage to run as if they were the verdict.
 `bin/fm-park.sh --help` owns the mechanics; that header is where the conditions, the traps, and the reasoning behind each boundary are written down.
 
 ## Report it
