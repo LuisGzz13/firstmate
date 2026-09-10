@@ -50,9 +50,10 @@ The reason this exists is that the previous by-hand check missed things that wer
 
 Two things it deliberately reports rather than resolves, so read them as prompts rather than verdicts.
 
-A local copy holding review boards or screenshots is reported until those bytes are inside the home's `data/` folder.
-Content that was folded into another file instead of copied still reports, because proving that would mean guessing.
-The clearing action is the captain's call: copy it in, or delete it.
+A local copy holding review boards or screenshots is reported until that content is inside the home's `data/` folder.
+Copying it in clears it whatever you rename it to and whatever folder you put it in, and so does exporting or consolidating it into a larger file, so one archive covering twenty records satisfies all twenty.
+A screenshot clears only by its bytes: one folded into a document as encoded text keeps reporting, because proving otherwise would mean guessing.
+The clearing action is the captain's call either way: carry it in, or delete it.
 
 An open question with no held task is reported as something the other machine would not see.
 That is a real gap and `captain-hold-lifecycle` owns closing it, but the question may already have been answered in a way that only you know about.

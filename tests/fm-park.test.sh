@@ -404,6 +404,145 @@ test_review_boards_outside_the_carried_scope_block() {
   pass "review boards block until their bytes are inside the carried scope"
 }
 
+test_records_consolidated_into_one_archive_count_as_carried() {
+  local home out i
+  home=$(make_home consolidated)
+  park_repo "$home"
+  mkdir -p "$home/state/procevent-inbox"
+  for i in 1 2 3; do
+    printf 'The captain answered board %s: absorb it and keep one hundred and fifty flat everywhere.\n' \
+      "$i" > "$home/state/procevent-inbox/board.$i.result"
+  done
+
+  park "$home"; out=$PARK_OUT
+  expect_code 1 "$PARK_RC" "captured answers outside the carried scope did not block"
+  assert_contains "$out" "3 of the captain's recorded answers" \
+    "the three captured answers were not reported"
+
+  # Exporting them into ONE archive is what actually happens, and it leaves no
+  # file with matching bytes. A per-file comparison would light this blocker
+  # forever, which is the whole reason the containment pass exists.
+  {
+    printf '# The captain answers, verbatim archive\n\n'
+    for i in 1 2 3; do
+      printf '## board.%s\n\n```\n' "$i"
+      cat "$home/state/procevent-inbox/board.$i.result"
+      printf '```\n\n'
+    done
+  } > "$home/data/captain-answers-archive.md"
+
+  park "$home"; out=$PARK_OUT
+  expect_code 0 "$PARK_RC" "records consolidated into one archive were still reported"
+  assert_not_contains "$out" "recorded answers" \
+    "an archive that carries every record did not clear them"
+  pass "records consolidated into a single archive count as carried"
+}
+
+test_a_partial_archive_still_reports_what_it_left_out() {
+  local home out
+  home=$(make_home partial-archive)
+  park_repo "$home"
+  mkdir -p "$home/state/procevent-inbox"
+  printf 'The captain kept the home address as the return address on every label.\n' \
+    > "$home/state/procevent-inbox/board.1.result"
+  printf 'The captain chose Phobos, because it is the only name that obeys the rule.\n' \
+    > "$home/state/procevent-inbox/board.2.result"
+
+  # An archive that carries one record and not the other must still report the
+  # one it left out: the conservative bias is what this whole check is for.
+  {
+    printf '# archive\n\n'
+    cat "$home/state/procevent-inbox/board.1.result"
+  } > "$home/data/captain-answers-archive.md"
+
+  park "$home"; out=$PARK_OUT
+  expect_code 1 "$PARK_RC" "a record the archive left out was passed over"
+  assert_contains "$out" "1 of the captain's recorded answers" \
+    "a partial archive cleared a record it does not carry"
+  pass "a partial archive still reports the records it left out"
+}
+
+test_a_board_carried_under_a_different_name_and_folder_clears() {
+  local home out
+  home=$(make_home renamed-board)
+  park_repo "$home"
+  mkdir -p "$home/.lavish" "$home/data/boards/archive"
+  printf '<html><body>The decision, the evidence behind it, and the plan it produced.</body></html>\n' \
+    > "$home/.lavish/decision.html"
+  cp "$home/.lavish/decision.html" "$home/data/boards/archive/2026-09-10-decision-record.html"
+
+  park "$home"; out=$PARK_OUT
+  expect_code 0 "$PARK_RC" "a board carried under a different name and folder was reported"
+  assert_not_contains "$out" "review board file(s)" \
+    "coverage was decided by filename rather than by content"
+  pass "a board carried under a different name and folder clears"
+}
+
+test_a_board_folded_into_a_larger_document_clears() {
+  local home out
+  home=$(make_home folded-board)
+  park_repo "$home"
+  mkdir -p "$home/.lavish"
+  cat > "$home/.lavish/decision.html" <<'BOARD'
+<html><body>
+<p>The first finding, which settled how the shipping rate is calculated.</p>
+<p>The second finding, which settled which of the two names the product takes.</p>
+</body></html>
+BOARD
+  {
+    printf '# Report\n\nThe board this was built from is reproduced below.\n\n'
+    cat "$home/.lavish/decision.html"
+    printf '\nAnd the conclusion it led to.\n'
+  } > "$home/data/report.md"
+
+  park "$home"; out=$PARK_OUT
+  expect_code 0 "$PARK_RC" "a board folded into a larger carried document was reported"
+  pass "a board folded into a larger carried document clears"
+}
+
+test_boilerplate_alone_never_clears_an_artifact() {
+  local home out
+  home=$(make_home boilerplate)
+  park_repo "$home"
+  mkdir -p "$home/.lavish"
+  # Two boards from one generator share every line of their frame. Only the
+  # first is carried. The second must still report, because sharing a frame is
+  # not being carried.
+  cat > "$home/.lavish/carried.html" <<'BOARD'
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body class="board-frame board-frame--wide" data-generator="the shared board generator">
+<p>The first board says the coating was tested for eighteen months in the desert.</p>
+</body></html>
+BOARD
+  sed 's/first board says the coating was tested for eighteen months in the desert/second board says something else entirely that appears nowhere else/'     "$home/.lavish/carried.html" > "$home/.lavish/stranded.html"
+  cp "$home/.lavish/carried.html" "$home/data/carried.html"
+
+  park "$home"; out=$PARK_OUT
+  expect_code 1 "$PARK_RC" "a board sharing only its frame with a carried board was cleared"
+  assert_contains "$out" "1 review board file(s)" \
+    "shared boilerplate cleared an artifact that is not carried, or the carried one was reported"
+  pass "shared boilerplate alone never clears an artifact"
+}
+
+test_a_binary_artifact_is_judged_on_its_bytes_alone() {
+  local home out
+  home=$(make_home binary)
+  park_repo "$home"
+  mkdir -p "$home/.lavish"
+  printf '\211PNG\r\n\032\n' > "$home/.lavish/shot.png"
+  printf 'this is padding that makes the screenshot long enough to sample from\n' \
+    >> "$home/.lavish/shot.png"
+
+  park "$home"; out=$PARK_OUT
+  expect_code 1 "$PARK_RC" "a screenshot outside the carried scope was not reported"
+  assert_contains "$out" "1 review board file(s)" "the screenshot was not reported"
+
+  cp "$home/.lavish/shot.png" "$home/data/shot.png"
+  park "$home"; out=$PARK_OUT
+  expect_code 0 "$PARK_RC" "a screenshot copied into data/ was still reported"
+  pass "a binary artifact clears by its bytes and never by sampled lines"
+}
+
 test_captured_captain_answers_block_but_their_markers_do_not() {
   local home out
   home=$(make_home answers)
@@ -575,6 +714,12 @@ test_declared_waits_and_idle_workers_do_not_block
 test_a_secondmate_home_is_left_to_its_own_check
 test_review_boards_outside_the_carried_scope_block
 test_captured_captain_answers_block_but_their_markers_do_not
+test_records_consolidated_into_one_archive_count_as_carried
+test_a_partial_archive_still_reports_what_it_left_out
+test_a_board_carried_under_a_different_name_and_folder_clears
+test_a_board_folded_into_a_larger_document_clears
+test_boilerplate_alone_never_clears_an_artifact
+test_a_binary_artifact_is_judged_on_its_bytes_alone
 test_a_task_with_no_durable_account_blocks
 test_a_recorded_pull_request_is_a_durable_account
 test_an_open_question_with_no_held_task_blocks

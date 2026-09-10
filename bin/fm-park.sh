@@ -75,11 +75,26 @@
 #   consolidation question - both machines read the same backlog either way.
 #   bin/fm-captain-hold.sh diverged owns that seam.
 #
-# Coverage inside the carried scope is byte identity: an artifact is carried
-# when a file with the same bytes exists under data/ or config/. That is what
-# copying it there produces, it can never clear something that is not actually
-# there, and it needs no guess about whether one file's content was folded into
-# another.
+# COVERAGE INSIDE THE CARRIED SCOPE is decided in two passes, because a gate
+# that can never go green is one people learn to ignore.
+#
+#   An artifact is carried when a file with the same bytes exists under data/
+#   or config/. This is path-independent, so copying it in under a different
+#   name or into a different folder clears it.
+#
+#   Otherwise it is carried when every one of up to eight substantial lines,
+#   sampled evenly through it, is found somewhere in the carried scope. This is
+#   what recognizes a consolidation: exporting twenty capture records into one
+#   archive leaves no file with matching bytes, yet every record is genuinely
+#   carried, and a per-file comparison would light that blocker forever.
+#
+# The bias stays conservative in both passes, because a false negative here is
+# what let a commit sit alone for four days. Only lines of at least 40
+# characters are sampled and EVERY sample must be found, so no artifact clears
+# on shared boilerplate. An artifact with no such line, and any binary file,
+# is judged on its bytes alone: a screenshot copied in clears, and one folded
+# into a document as encoded text keeps reporting, because proving that would
+# mean guessing.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -137,10 +152,10 @@ park_hash_tree() {  # <name-glob-or-empty> <dir>...
   [ "${#dirs[@]}" -gt 0 ] || return 0
   [ -n "$glob" ] && filter=(-name "$glob")
   if command -v shasum >/dev/null 2>&1; then
-    find "${dirs[@]}" -type f "${filter[@]+"${filter[@]}"}" -exec shasum -a 256 {} + 2>/dev/null | awk '{print $1}'
+    find "${dirs[@]}" -type f "${filter[@]+"${filter[@]}"}" -exec shasum -a 256 {} + 2>/dev/null
   else
-    find "${dirs[@]}" -type f "${filter[@]+"${filter[@]}"}" -exec sha256sum {} + 2>/dev/null | awk '{print $1}'
-  fi
+    find "${dirs[@]}" -type f "${filter[@]+"${filter[@]}"}" -exec sha256sum {} + 2>/dev/null
+  fi | LC_ALL=C awk '{ h = $1; sub(/^[0-9a-f]+  /, ""); print h "\t" $0 }'
 }
 
 # Every content hash inside the carried scope, computed once. Deliberately not
@@ -151,7 +166,7 @@ PARK_CARRIED_BUILT=0
 park_build_carried() {
   [ "$PARK_CARRIED_BUILT" -eq 0 ] || return 0
   PARK_CARRIED_BUILT=1
-  PARK_CARRIED_HASHES=$'\n'"$(park_hash_tree '' "$DATA" "$CONFIG")"$'\n'
+  PARK_CARRIED_HASHES=$'\n'"$(park_hash_tree '' "$DATA" "$CONFIG" | cut -f1)"$'\n'
 }
 
 # 0 when hash $1 is already inside the carried scope.
@@ -191,16 +206,100 @@ park_bundle_has() {  # <sha>
   return 1
 }
 
-# How many files under directory $1 - all of them, or only those matching name
-# glob $2 - have bytes the carried scope does not already hold.
-park_uncarried_count() {  # <dir> [name-glob]
-  local dir=$1 glob=${2:-} h count=0
-  [ -d "$dir" ] || { printf '0'; return 0; }
-  while IFS= read -r h; do
-    [ -n "$h" ] || continue
-    park_hash_is_carried "$h" && continue
-    count=$((count + 1))
+# A scratch directory for the containment pass, created once. An EXIT trap
+# removes it, so nothing this check writes outlives the run.
+PARK_TMP=
+park_tmp() {
+  [ -n "$PARK_TMP" ] && { printf '%s' "$PARK_TMP"; return 0; }
+  PARK_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-park.XXXXXX" 2>/dev/null) || return 1
+  trap 'rm -rf "$PARK_TMP"' EXIT
+  printf '%s' "$PARK_TMP"
+}
+
+# 0 when the start of file $1 holds no NUL byte, so its lines can be used as
+# literal search patterns. Binary content cannot, and is judged on bytes alone.
+park_is_text() {  # <file>
+  local raw stripped
+  raw=$(LC_ALL=C head -c 8192 "$1" 2>/dev/null | wc -c | tr -d ' ')
+  stripped=$(LC_ALL=C head -c 8192 "$1" 2>/dev/null | LC_ALL=C tr -d '\000' | wc -c | tr -d ' ')
+  [ -n "$raw" ] && [ "$raw" = "$stripped" ]
+}
+
+# Up to eight substantial lines spread evenly through file $1. Prints nothing
+# when it has none, which the caller reads as "cannot be proven carried this
+# way" rather than as carried.
+park_sample_lines() {  # <file>
+  LC_ALL=C awk '
+    { line = substr($0, 1, 4096) }
+    length(line) >= 40 { lines[++n] = line }
+    END {
+      if (n == 0) exit 0
+      want = 8
+      if (n <= want) { for (i = 1; i <= n; i++) print lines[i]; exit 0 }
+      for (j = 0; j < want; j++) print lines[int(j * (n - 1) / (want - 1)) + 1]
+    }
+  ' "$1"
+}
+
+# Every substantial line the carried scope holds, gathered once into a sorted
+# set. Searching that set is what makes the containment pass cheap: the scope
+# is read once here rather than re-scanned for each artifact, and membership is
+# then a set comparison rather than a substring search. Matching is per line and
+# exact, which is stricter than substring containment and therefore stays on
+# the reporting side of any doubt.
+PARK_CARRIED_LINES=
+PARK_CARRIED_LINES_BUILT=0
+park_build_carried_lines() {
+  local tmp
+  local -a scope=()
+  [ "$PARK_CARRIED_LINES_BUILT" -eq 0 ] || return 0
+  PARK_CARRIED_LINES_BUILT=1
+  tmp=$(park_tmp) || return 0
+  PARK_CARRIED_LINES="$tmp/carried-lines"
+  : > "$PARK_CARRIED_LINES"
+  [ -d "$DATA" ] && scope+=("$DATA")
+  [ -d "$CONFIG" ] && scope+=("$CONFIG")
+  [ "${#scope[@]}" -gt 0 ] || return 0
+  # awk is given the files themselves rather than a concatenation, so a file
+  # that ends without a newline cannot join its last line to the next file's
+  # first and lose them both.
+  LC_ALL=C find "${scope[@]}" -type f -exec awk '
+    { line = substr($0, 1, 4096) }
+    length(line) >= 40 { print line }
+  ' {} + 2>/dev/null | LC_ALL=C sort -u > "$PARK_CARRIED_LINES"
+}
+
+# The files under directory $1 - all of them, or only those matching name glob
+# $2 - whose content the carried scope does not already hold. One path per line.
+park_uncarried_files() {  # <dir> [name-glob]
+  local dir=$1 glob=${2:-} hash path samples
+  [ -d "$dir" ] || return 0
+  park_build_carried
+  park_build_carried_lines
+  while IFS=$'\t' read -r hash path; do
+    [ -n "$path" ] || continue
+    # Pass one: identical bytes somewhere in the carried scope, wherever they
+    # sit and whatever they are called.
+    park_hash_is_carried "$hash" && continue
+    # Pass two: every sampled line already inside the carried scope, which is
+    # what recognizes an artifact consolidated into a larger file.
+    if [ -n "$PARK_CARRIED_LINES" ] && [ -s "$PARK_CARRIED_LINES" ] && park_is_text "$path"; then
+      samples=$(park_sample_lines "$path" | LC_ALL=C sort -u)
+      if [ -n "$samples" ] \
+        && [ -z "$(LC_ALL=C comm -23 <(printf '%s\n' "$samples") "$PARK_CARRIED_LINES")" ]; then
+        continue
+      fi
+    fi
+    printf '%s\n' "$path"
   done < <(park_hash_tree "$glob" "$dir")
+}
+
+# How many files under directory $1 - all of them, or only those matching name
+# glob $2 - the carried scope does not already hold.
+park_uncarried_count() {  # <dir> [name-glob]
+  local count
+  count=$(park_uncarried_files "$@" | wc -l | tr -d ' ')
+  case "${count:-}" in ''|*[!0-9]*) count=0 ;; esac
   printf '%s' "$count"
 }
 
@@ -392,9 +491,12 @@ check_stranded() {
   local repo copy store count meta id data_dir others
   local seen=$'\n'
 
-  # Build the carried-scope index here, in this shell, so the per-store counts
-  # below reuse it instead of each command substitution rebuilding its own.
+  # Build the carried-scope index and scratch directory here, in this shell, so
+  # the per-store counts below reuse them instead of each command substitution
+  # rebuilding its own.
   park_build_carried
+  park_tmp >/dev/null || true
+  park_build_carried_lines
 
   # Review boards. Lavish writes them beside the code it was run from, so they
   # land in local copies that cleanup destroys on purpose.
@@ -417,7 +519,7 @@ check_stranded() {
   # runtime bookkeeping, not something anyone would want back.
   count=$(park_uncarried_count "$STATE/procevent-inbox" '*.result')
   if [ "$count" -gt 0 ]; then
-    blocker "$count of the captain's recorded answers under $STATE/procevent-inbox are not in the home's data/ folder, so his exact words would not travel. Copy them into data/."
+    blocker "$count of the captain's recorded answers under $STATE/procevent-inbox are not in the home's data/ folder, so his exact words would not travel. Copy or export them into data/."
   fi
 
   # A task whose only account of itself is a local record. Its own folder under
