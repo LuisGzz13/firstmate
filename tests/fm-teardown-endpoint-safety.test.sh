@@ -1656,6 +1656,16 @@ test_persistent_home_reconciliation_refuses_unproved_ownership() {
   assert_claim_slot_refused "$dir" "$before" "mismatched lease holder" "lease"
   assert_persistent_teardown_refused "$dir" old-scout-a "$before" "mismatched lease holder"
 
+  # A claim already naming the secondmate is a different owner, but on a
+  # persistent home that alone must not skip the duplicate-record scan the
+  # failed proof leaves in force.
+  dir=$(make_persistent_case unproved-lease-reconciled-claim "$PERSISTENT_MATE" old-scout-a old-scout-b)
+  seed_slot_as_persistent_home "$dir" other-mate
+  before=$(persistent_home_fingerprint "$dir")
+  assert_persistent_teardown_refused "$dir" old-scout-a "$before" "mismatched lease holder under a secondmate claim"
+  assert_contains "$(cat "$dir/stderr")" "is also task old-scout-b's recorded worktree" \
+    "mismatched lease holder under a secondmate claim: the duplicate-record refusal should stand"
+
   dir=$(make_persistent_case unproved-no-lease old-scout-a old-scout-a)
   printf '{"worktrees":[{"name":"1","path":"%s"}]}\n' "$(cd "$dir/pool/1/project" && pwd -P)" \
     > "$dir/pool/treehouse-state.json"
