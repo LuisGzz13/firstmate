@@ -158,7 +158,7 @@ Seeding is transactional.
 If validation, cloning, no-mistakes initialization, or registry update fails, generated briefs, new homes, new project clones, and registry edits are rolled back.
 
 A leased home also carries its Treehouse slot's owner claim.
-When teardown of an older task refuses because that claim on a seeded home still names the task, run `bin/fm-home-seed.sh claim-slot <id>` from the registering home, then re-run the teardown; its header owns the proof, and the older records, claim, and home are never deleted, hidden, or rewritten to get past the refusal.
+When teardown of an older task whose record names a seeded home refuses while that claim does not yet name the secondmate, run `bin/fm-home-seed.sh claim-slot <id>` from the registering home, then re-run the teardown; its header owns the proof, and the older records, claim, and home are never deleted, hidden, or hand-edited to get past the refusal.
 
 Secondmate project lists may include `no-mistakes` and `direct-PR` projects only.
 `local-only` projects stay with the main firstmate.
