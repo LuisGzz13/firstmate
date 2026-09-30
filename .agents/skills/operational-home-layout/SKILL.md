@@ -55,6 +55,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
 projects/            cloned repos; gitignored; read-only except under hard rule 1's concrete captain-approved project operation exception
+  <name>/treehouse.toml  secondmate homes only: the git-excluded Treehouse setting fm-spawn keeps so this clone's task copies come from its own pool under ~/.treehouse/firstmate-home-<hash>/ instead of the pool its origin shares; bin/fm-wake-lib.sh's fm_treehouse_clone_pool_ensure owns it
 state/               runtime records and signals; gitignored
   <id>.status        append-only wake events, not current-state truth; bin/fm-classify-lib.sh owns their syntax
   <id>.turn-ended    touched by turn-end hooks

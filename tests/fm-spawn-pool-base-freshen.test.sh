@@ -78,6 +78,8 @@ REC
     "the remote-seeded spawn did not report success"
   assert_grep "worktree=$POOL_DIR" "$HOME_DIR/state/$id.meta" \
     "the remote-seeded spawn did not publish its allocated pool worktree"
+  [ ! -e "$PROJECT_DIR/treehouse.toml" ] \
+    || fail "a spawn wrote a treehouse.toml into a project outside the home's projects/"
   lock=$(FM_HOME="$HOME_DIR" bash -c '. "$1"; fm_treehouse_project_lock_path "$2"' _ \
     "$ROOT/bin/fm-wake-lib.sh" "$PROJECT_DIR") \
     || fail "the launched remote-seeded home could not resolve its Treehouse project lock"
@@ -743,8 +745,222 @@ test_pool_slot_claim_follows_the_spawn_outcome() {
   pass "a Treehouse slot claim names the launched task, refuses when unclaimable, and is dropped by a locked abort"
 }
 
+# Two independent clones of one origin under the same directory name - the root
+# home's projects/project and a secondmate home's projects/project - which
+# Treehouse would give one shared pool. Each clone has one linked worktree
+# standing in for a pooled task copy: <case>/root-slot and <case>/home-slot.
+make_clone_pool_case() {  # <name> <id> [local|remote]
+  local name=$1 id=$2 route=${3:-local} case_dir root home seed origin fakebin h
+  case_dir="$TMP_ROOT/$name"
+  root="$case_dir/root-home"
+  home="$case_dir/home"
+  seed="$case_dir/seed"
+  origin="$case_dir/origin.git"
+  fakebin=$(make_spawn_fakebin "$case_dir/fake")
+
+  for h in "$root" "$home"; do
+    mkdir -p "$h/data" "$h/projects" "$h/state" "$h/config"
+    printf 'codex\n' > "$h/config/crew-harness"
+    touch "$h/state/.last-watcher-beat"
+  done
+  fm_test_spawn_brief "$home" "$id"
+  if [ "$route" = remote ]; then
+    printf 'schema=fm-secondmate-parent.v1\nroute=remote\nparent_host=parent-machine\n' \
+      > "$home/.fm-secondmate-parent"
+  else
+    printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$root" \
+      > "$home/.fm-secondmate-parent"
+  fi
+
+  git init --quiet -b main "$seed"
+  printf 'base\n' > "$seed/README.md"
+  git -C "$seed" add README.md
+  git -C "$seed" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
+  git clone --quiet --bare "$seed" "$origin"
+  git clone --quiet "file://$origin" "$root/projects/project"
+  git clone --quiet "file://$origin" "$home/projects/project"
+  git -C "$root/projects/project" worktree add --quiet --detach "$case_dir/root-slot" HEAD
+  git -C "$home/projects/project" worktree add --quiet --detach "$case_dir/home-slot" HEAD
+
+  printf '%s\n' "$case_dir|$root|$home|$fakebin"
+}
+
+read_clone_pool_case() {
+  IFS='|' read -r CASE_DIR ROOT_HOME_DIR HOME_DIR FAKEBIN_DIR <<EOF
+$1
+EOF
+}
+
+spawn_from() {  # <home> <pane-path> <id> <project-dir> [args...]
+  local home=$1 pane=$2 id=$3 project=$4
+  shift 4
+  fm_test_spawn_brief "$home" "$id"
+  fm_test_run_spawn "$home" "$pane" "$FAKEBIN_DIR" "$id" "$project" --scout "$@"
+}
+
+clone_pool_marker='# fm-treehouse-clone-pool.v1'
+
+# The managed file names a root of this spawn's HOME, unique to the home.
+assert_clone_pool_file() {  # <clone> <home>
+  local clone=$1 home=$2 user_home root_line suffix
+  [ -f "$clone/treehouse.toml" ] && [ ! -L "$clone/treehouse.toml" ] \
+    || fail "the secondmate clone has no Firstmate treehouse.toml"
+  case "$(sed -n 1p "$clone/treehouse.toml")" in
+    "$clone_pool_marker"*) ;;
+    *) fail "the clone's treehouse.toml does not open with the Firstmate marker: $(cat "$clone/treehouse.toml")" ;;
+  esac
+  user_home=$(cd "$home/user-home" && pwd -P)
+  root_line=$(sed -n 2p "$clone/treehouse.toml")
+  suffix=${root_line#"root = '$user_home/.treehouse/firstmate-home-"}
+  [ "$suffix" != "$root_line" ] && [[ "$suffix" =~ ^[0-9a-f]{12}\'$ ]] \
+    || fail "the clone's pool root is not a per-home root under the spawn's HOME: $root_line"
+  [ "$(wc -l < "$clone/treehouse.toml" | tr -d ' ')" = 2 ] \
+    || fail "the clone's treehouse.toml carries more than the marker and root: $(cat "$clone/treehouse.toml")"
+  [ "$(grep -cxF '/treehouse.toml' "$clone/.git/info/exclude")" = 1 ] \
+    || fail "the clone's info/exclude does not list treehouse.toml exactly once: $(cat "$clone/.git/info/exclude")"
+  [ -z "$(git -C "$clone" status --porcelain --untracked-files=all)" ] \
+    || fail "the managed treehouse.toml makes the clone read as changed: $(git -C "$clone" status --porcelain --untracked-files=all)"
+}
+
+# Treehouse keys a pool by repository name and origin, so without a setting of
+# its own a secondmate home's clone shares the root clone's pool. Spawning from
+# that clone writes the Firstmate-managed, git-excluded treehouse.toml that
+# roots its pool in a per-home directory, keeps it exact across repeats and
+# drift, and never touches the root home's clone.
+test_secondmate_clone_gets_its_own_pool() {
+  local rec id out status clone saved route
+  for route in local remote; do
+    id="clone-pool-own-$route-r1"
+    rec=$(make_clone_pool_case "clone-pool-own-$route" "$id" "$route")
+    read_clone_pool_case "$rec"
+    clone="$HOME_DIR/projects/project"
+
+    out=$(spawn_from "$HOME_DIR" "$CASE_DIR/home-slot" "$id" "$clone")
+    status=$?
+    expect_code 0 "$status" "a $route secondmate clone should launch from its own copy"$'\n'"$out"
+    assert_grep "worktree=$CASE_DIR/home-slot" "$HOME_DIR/state/$id.meta" \
+      "the secondmate spawn did not publish its own clone's copy"
+    assert_clone_pool_file "$clone" "$HOME_DIR"
+    saved=$(cat "$clone/treehouse.toml")
+    # Repeats and drift are route-independent; the local home covers them.
+    [ "$route" = local ] || continue
+
+    out=$(spawn_from "$HOME_DIR" "$CASE_DIR/home-slot" "$id-repeat" "$clone")
+    status=$?
+    expect_code 0 "$status" "a repeated $route secondmate spawn should launch"$'\n'"$out"
+    assert_clone_pool_file "$clone" "$HOME_DIR"
+    [ "$(cat "$clone/treehouse.toml")" = "$saved" ] || fail "a repeated spawn changed the managed treehouse.toml"
+
+    printf '%s\nroot = %s\n' "$clone_pool_marker: stale" "'/elsewhere'" > "$clone/treehouse.toml"
+    out=$(spawn_from "$HOME_DIR" "$CASE_DIR/home-slot" "$id-drift" "$clone")
+    status=$?
+    expect_code 0 "$status" "a $route secondmate spawn over a drifted managed file should launch"$'\n'"$out"
+    assert_clone_pool_file "$clone" "$HOME_DIR"
+    [ "$(cat "$clone/treehouse.toml")" = "$saved" ] || fail "a drifted managed treehouse.toml was not restored"
+  done
+
+  out=$(spawn_from "$ROOT_HOME_DIR" "$CASE_DIR/root-slot" clone-pool-root-r1 "$ROOT_HOME_DIR/projects/project")
+  status=$?
+  expect_code 0 "$status" "the root home's clone should launch from its own copy"$'\n'"$out"
+  [ ! -e "$ROOT_HOME_DIR/projects/project/treehouse.toml" ] \
+    || fail "a root home spawn wrote a treehouse.toml into its clone"
+  [ -z "$(git -C "$ROOT_HOME_DIR/projects/project" status --porcelain --untracked-files=all)" ] \
+    || fail "a root home spawn changed its clone"
+  if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
+    printf '# secondmate clone treehouse.toml:\n%s\n' "$saved"
+    printf '# secondmate clone info/exclude:\n%s\n' "$(cat "$clone/.git/info/exclude")"
+  fi
+  pass "a secondmate home's clone gets its own Treehouse pool while the root home's clone keeps the default"
+}
+
+# A pool shared with another clone of the same origin can still hand out that
+# clone's copy (a pool from before this rule, or a foreign treehouse.toml). Its
+# branch and pipeline would land in a repository the task does not own, so
+# spawn refuses it for every harness before publishing a record or refreshing
+# the copy.
+test_task_copy_of_another_clone_is_refused() {
+  local rec out status before
+  rec=$(make_clone_pool_case clone-pool-foreign-copy clone-pool-foreign-r1)
+  read_clone_pool_case "$rec"
+
+  before=$(git -C "$CASE_DIR/home-slot" rev-parse HEAD)
+  out=$(spawn_from "$ROOT_HOME_DIR" "$CASE_DIR/home-slot" clone-pool-foreign-r1 "$ROOT_HOME_DIR/projects/project")
+  status=$?
+  [ "$status" -ne 0 ] || fail "the root home launched a worker in the secondmate clone's copy"
+  assert_contains "$out" "belongs to the repository at" \
+    "the refusal did not name the copy's own repository"
+  assert_contains "$out" "another clone of the same origin shares this Treehouse pool" \
+    "the refusal did not explain the shared pool"
+  [ ! -e "$ROOT_HOME_DIR/state/clone-pool-foreign-r1.meta" ] \
+    || fail "the refused spawn published a task record"
+  [ "$(git -C "$CASE_DIR/home-slot" rev-parse HEAD)" = "$before" ] \
+    || fail "the refused spawn refreshed another clone's copy"
+
+  out=$(spawn_from "$HOME_DIR" "$CASE_DIR/root-slot" clone-pool-foreign-r2 "$HOME_DIR/projects/project")
+  status=$?
+  [ "$status" -ne 0 ] || fail "the secondmate home launched a worker in the root clone's copy"
+  assert_contains "$out" "belongs to the repository at" \
+    "the secondmate-side refusal did not name the copy's own repository"
+  [ ! -e "$HOME_DIR/state/clone-pool-foreign-r2.meta" ] \
+    || fail "the refused secondmate spawn published a task record"
+  pass "a task copy that belongs to another clone of the same origin is refused for every harness"
+}
+
+# A treehouse.toml Firstmate did not write is the operator's or the project's
+# configuration: untracked and unmarked, tracked, or a symlink, it is left
+# byte-for-byte alone and the spawn says that file decides the pool. A project
+# that is itself a linked worktree shares its repository's pool by design and
+# gets no file at all.
+test_foreign_treehouse_config_and_linked_projects_are_left_alone() {
+  local rec out status clone
+  rec=$(make_clone_pool_case clone-pool-foreign-config clone-pool-cfg-r1)
+  read_clone_pool_case "$rec"
+  clone="$HOME_DIR/projects/project"
+
+  printf "root = '/operator/chosen'\n" > "$clone/treehouse.toml"
+  out=$(spawn_from "$HOME_DIR" "$CASE_DIR/home-slot" clone-pool-cfg-r1 "$clone")
+  status=$?
+  expect_code 0 "$status" "a clone with its own treehouse.toml should still launch"$'\n'"$out"
+  [ "$(cat "$clone/treehouse.toml")" = "root = '/operator/chosen'" ] \
+    || fail "spawn rewrote an unmarked treehouse.toml: $(cat "$clone/treehouse.toml")"
+  assert_contains "$out" "treehouse.toml is not Firstmate's" \
+    "spawn did not say that an unmarked treehouse.toml decides the pool"
+  ! grep -qxF '/treehouse.toml' "$clone/.git/info/exclude" \
+    || fail "spawn excluded an operator's own treehouse.toml"
+
+  git -C "$clone" add treehouse.toml
+  git -C "$clone" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm 'track treehouse config'
+  out=$(spawn_from "$HOME_DIR" "$CASE_DIR/home-slot" clone-pool-cfg-r2 "$clone")
+  status=$?
+  expect_code 0 "$status" "a clone tracking its own treehouse.toml should still launch"$'\n'"$out"
+  [ "$(cat "$clone/treehouse.toml")" = "root = '/operator/chosen'" ] \
+    || fail "spawn rewrote a tracked treehouse.toml"
+  [ -z "$(git -C "$clone" status --porcelain)" ] || fail "spawn modified a tracked treehouse.toml"
+
+  git -C "$clone" rm --quiet treehouse.toml
+  git -C "$clone" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm 'untrack treehouse config'
+  ln -s "$CASE_DIR/elsewhere.toml" "$clone/treehouse.toml"
+  out=$(spawn_from "$HOME_DIR" "$CASE_DIR/home-slot" clone-pool-cfg-r3 "$clone")
+  status=$?
+  expect_code 0 "$status" "a clone with a symlinked treehouse.toml should still launch"$'\n'"$out"
+  [ -L "$clone/treehouse.toml" ] && [ ! -e "$CASE_DIR/elsewhere.toml" ] \
+    || fail "spawn replaced or wrote through a symlinked treehouse.toml"
+  rm -f "$clone/treehouse.toml"
+
+  git -C "$clone" worktree add --quiet --detach "$HOME_DIR/projects/linked" HEAD
+  out=$(spawn_from "$HOME_DIR" "$CASE_DIR/home-slot" clone-pool-linked-r1 "$HOME_DIR/projects/linked")
+  status=$?
+  expect_code 0 "$status" "a linked-worktree project in a secondmate home should launch"$'\n'"$out"
+  [ ! -e "$HOME_DIR/projects/linked/treehouse.toml" ] && [ ! -e "$clone/treehouse.toml" ] \
+    || fail "spawn gave a linked-worktree project its own pool"
+  pass "a treehouse.toml Firstmate did not write, and a linked-worktree project, are left alone"
+}
+
 test_remote_seeded_home_spawns_from_treehouse_pool
 test_pool_slot_claim_follows_the_spawn_outcome
+test_secondmate_clone_gets_its_own_pool
+test_task_copy_of_another_clone_is_refused
+test_foreign_treehouse_config_and_linked_projects_are_left_alone
 test_linked_spawning_home_rejects_primary_before_refresh
 test_stale_pool_base_refreshes_before_branching
 test_non_main_default_branch_refreshes_before_branching

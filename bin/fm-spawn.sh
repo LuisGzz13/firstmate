@@ -163,6 +163,14 @@
 #   fm_firstmate_root_home resolves, so a home seeded from another machine anchors
 #   that lock itself rather than failing to resolve one;
 #   contention refuses rather than waits.
+#   Under that lock, after every preflight and before any endpoint exists, a
+#   spawn from a secondmate home's own projects/<name> clone gives the clone its
+#   own Treehouse pool (bin/fm-wake-lib.sh's fm_treehouse_clone_pool_ensure owns
+#   the rule and the Firstmate-managed, git-excluded treehouse.toml it writes),
+#   because Treehouse keys pools by repository name and origin, not by clone.
+#   After `treehouse get`, a task copy whose git common dir is not the declared
+#   project's refuses the spawn for every harness, so a pool still shared with
+#   another clone can never launch a worker in that other clone's repository.
 #   With no harness arg, a crewmate/scout spawn resolves the CREW harness only when
 #   config/crew-dispatch.json is absent. When that file exists, crewmate/scout
 #   spawns require an explicit harness so firstmate cannot silently skip dispatch
@@ -3255,6 +3263,23 @@ validate_spawn_worktree() { # <source> <inspect-target>
   fi
 }
 
+# A Treehouse pool is keyed by repository name and origin, not by clone, so a
+# pool that another clone of the same origin also draws from can hand this
+# spawn a worktree of that other clone. Its branch, hooks and pipeline would
+# then live in a repository this task does not own, whatever the harness, so
+# the copy must share the declared project's git common dir.
+validate_spawn_worktree_project() { # <inspect-target>
+  local inspect_target=$1 wt_common proj_common
+  wt_common=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) &&
+    wt_common=$(cd "$wt_common" 2>/dev/null && pwd -P) || wt_common=
+  proj_common=$(git -C "$PROJ_ABS" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) &&
+    proj_common=$(cd "$proj_common" 2>/dev/null && pwd -P) || proj_common=
+  if [ -z "$wt_common" ] || [ -z "$proj_common" ] || [ "$wt_common" != "$proj_common" ]; then
+    echo "error: task copy '$WT' belongs to the repository at '${wt_common:-unknown}', not to project '$PROJ_ABS' ('${proj_common:-unknown}'); another clone of the same origin shares this Treehouse pool, so refusing to launch a worker whose work would land in that clone. Inspect target $inspect_target" >&2
+    exit 1
+  fi
+}
+
 # A pooled slot whose only deviation is a submodule gitlink is stale, not dirty:
 # an earlier refresh moved the superproject and left the submodule checkout on
 # the pin the previous base recorded. The refusal still stands and this gate
@@ -3484,6 +3509,15 @@ fi
 if [ -e "$STATE/$ID.backlog-close" ] || [ -L "$STATE/$ID.backlog-close" ]; then
   echo "error: task $ID has a pending authoritative backlog close at $STATE/$ID.backlog-close; finish or repair that close before dispatching a new worker" >&2
   exit 1
+fi
+
+# Keep a secondmate clone's slots out of the pool its origin shares with other
+# clones, under the project lock and before any endpoint exists.
+if [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" = 1 ]; then
+  fm_treehouse_clone_pool_ensure "$FM_HOME" "$PROJECTS" "$PROJ_ABS" || exit 1
+  if [ "$FM_TREEHOUSE_CLONE_POOL" = foreign ]; then
+    echo "warning: $PROJ_ABS/treehouse.toml is not Firstmate's, so it decides which Treehouse pool this secondmate clone uses" >&2
+  fi
 fi
 
 W="fm-$ID"
@@ -4278,6 +4312,7 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   fi
 
   validate_spawn_worktree "treehouse get" "$T"
+  validate_spawn_worktree_project "$T"
 
   # Claim the pool slot for this task. The interactive `treehouse get` sent to
   # the pane above records only a process lease (Treehouse's durable

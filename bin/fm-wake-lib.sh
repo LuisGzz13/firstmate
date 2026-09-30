@@ -1441,6 +1441,124 @@ fm_treehouse_pool_slot() {  # <project-dir> <worktree>
   [ "$project_common" = "$slot_common" ]
 }
 
+# A secondmate home's own clone draws its task copies from a pool of its own.
+#
+# Treehouse names a pool after the repository's directory name and a hash of its
+# origin URL, under a root that only a repo-level treehouse.toml can change
+# (v2.0.1 has no per-invocation root). The root home's projects/<name> and a
+# secondmate home's projects/<name> clone of the same origin therefore share
+# one pool, and `treehouse get` from either can hand out a slot that is a
+# linked worktree of the other clone - a copy whose branch, hooks and pipeline
+# belong to another home. The root home's clones keep Treehouse's default pool.
+# An independent clone directly under the projects/ of a home that carries a
+# secondmate parent binding (local or remote) gets a clone-local treehouse.toml
+# rooting its pools in a directory unique to that home, so its slots are always
+# its own worktrees; a linked-worktree project shares its repository's pool by
+# design and is left alone.
+#
+# The file is Firstmate's only while its first line opens with the versioned
+# marker below: it is listed in the clone's info/exclude so the clone never
+# reads as changed, and is rewritten whenever its content drifts. A treehouse.toml that is tracked, a
+# symlink, not a regular file, or unmarked is someone else's configuration and
+# is never touched; bin/fm-spawn.sh's ownership check still refuses any task
+# copy that is not a worktree of the declared project.
+#
+# Sets FM_TREEHOUSE_CLONE_POOL to default (Treehouse's default pool applies),
+# managed (the Firstmate file is in place), or foreign (an unmanaged
+# treehouse.toml decides). Returns non-zero with a message on stderr only when
+# the clone needs the file and it cannot be put in place.
+FM_TREEHOUSE_CLONE_POOL_MARKER='# fm-treehouse-clone-pool.v1'
+
+fm_treehouse_clone_pool_root() {  # <home>
+  local home=$1 base hash
+  home=$(CDPATH='' cd -- "$home" 2>/dev/null && pwd -P) || return 1
+  [ -n "${HOME:-}" ] || return 1
+  base=$(CDPATH='' cd -- "$HOME" 2>/dev/null && pwd -P) || return 1
+  hash=$(printf '%s' "$home" | git hash-object --stdin 2>/dev/null) || return 1
+  printf '%s/.treehouse/firstmate-home-%s\n' "$base" "${hash:0:12}"
+}
+
+fm_treehouse_clone_pool_ensure() {  # <home> <projects-dir> <project-dir>
+  local home=$1 projects=$2 project=$3 home_real projects_real proj_real
+  local top git_dir common_dir root content file tracked line exclude tmp
+  FM_TREEHOUSE_CLONE_POOL=default
+  home_real=$(CDPATH='' cd -- "$home" 2>/dev/null && pwd -P) || return 0
+  [ -e "$home_real/.fm-secondmate-parent" ] || [ -L "$home_real/.fm-secondmate-parent" ] || return 0
+  projects_real=$(CDPATH='' cd -- "$projects" 2>/dev/null && pwd -P) || return 0
+  proj_real=$(CDPATH='' cd -- "$project" 2>/dev/null && pwd -P) || return 0
+  [ "$(dirname "$proj_real")" = "$projects_real" ] || return 0
+  top=$(git -C "$proj_real" rev-parse --show-toplevel 2>/dev/null) &&
+    top=$(CDPATH='' cd -- "$top" 2>/dev/null && pwd -P) || top=
+  git_dir=$(git -C "$proj_real" rev-parse --absolute-git-dir 2>/dev/null) &&
+    git_dir=$(CDPATH='' cd -- "$git_dir" 2>/dev/null && pwd -P) || git_dir=
+  common_dir=$(git -C "$proj_real" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) &&
+    common_dir=$(CDPATH='' cd -- "$common_dir" 2>/dev/null && pwd -P) || common_dir=
+  if [ -z "$top" ] || [ -z "$git_dir" ] || [ -z "$common_dir" ]; then
+    echo "error: cannot resolve the git layout of secondmate clone $proj_real to give it its own Treehouse pool" >&2
+    return 1
+  fi
+  [ "$top" = "$proj_real" ] && [ "$git_dir" = "$common_dir" ] || return 0
+
+  root=$(fm_treehouse_clone_pool_root "$home_real") || {
+    echo "error: cannot resolve a Treehouse pool root for secondmate home $home_real" >&2
+    return 1
+  }
+  # The value is a TOML literal string, and Treehouse expands $VAR in it.
+  case "$root" in
+    *"'"*|*'$'*|*$'\n'*|*$'\r'*)
+      echo "error: Treehouse pool root '$root' cannot be written as a literal treehouse.toml value" >&2
+      return 1
+      ;;
+  esac
+  content="$FM_TREEHOUSE_CLONE_POOL_MARKER: written by Firstmate (bin/fm-wake-lib.sh); do not edit"$'\n'"root = '$root'"
+  file="$proj_real/treehouse.toml"
+  tracked=$(git -C "$proj_real" ls-files -- treehouse.toml 2>/dev/null) || {
+    echo "error: cannot tell whether $file is tracked by the project" >&2
+    return 1
+  }
+  if [ -n "$tracked" ] || [ -L "$file" ] || { [ -e "$file" ] && [ ! -f "$file" ]; }; then
+    FM_TREEHOUSE_CLONE_POOL=foreign
+    return 0
+  fi
+  if [ -f "$file" ]; then
+    line=
+    IFS= read -r line < "$file" || true
+    case "$line" in
+      "$FM_TREEHOUSE_CLONE_POOL_MARKER"|"$FM_TREEHOUSE_CLONE_POOL_MARKER:"*) ;;
+      *)
+        FM_TREEHOUSE_CLONE_POOL=foreign
+        return 0
+        ;;
+    esac
+  fi
+
+  exclude=$(git -C "$proj_real" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null) || exclude=
+  if [ -z "$exclude" ]; then
+    echo "error: cannot resolve the info/exclude file of secondmate clone $proj_real" >&2
+    return 1
+  fi
+  if ! grep -qxF '/treehouse.toml' "$exclude" 2>/dev/null; then
+    if ! {
+      mkdir -p "$(dirname "$exclude")" &&
+        { [ ! -s "$exclude" ] || [ -z "$(tail -c 1 "$exclude")" ] || printf '\n' >> "$exclude"; } &&
+        printf '/treehouse.toml\n' >> "$exclude"
+    } 2>/dev/null; then
+      echo "error: cannot exclude treehouse.toml in $exclude" >&2
+      return 1
+    fi
+  fi
+  if [ ! -f "$file" ] || [ "$(cat "$file" 2>/dev/null)" != "$content" ]; then
+    tmp="$git_dir/fm-treehouse.toml.tmp.${BASHPID:-$$}"
+    if ! { printf '%s\n' "$content" > "$tmp" && mv -f "$tmp" "$file"; } 2>/dev/null; then
+      rm -f "$tmp" 2>/dev/null
+      echo "error: cannot write $file to give secondmate clone $proj_real its own Treehouse pool" >&2
+      return 1
+    fi
+  fi
+  # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
+  FM_TREEHOUSE_CLONE_POOL=managed
+}
+
 # Slot-owner claim: which task a Treehouse pool slot currently belongs to.
 #
 # Treehouse can record ownership durably: `treehouse get --lease --lease-holder`
