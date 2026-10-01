@@ -1,0 +1,268 @@
+
+=== setup: marked lab home with the target tree, Treehouse pool inside the lab
+lab home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home at tree of 1e71c99 (treehouse root /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th)
+herdr lab session fm-lab-fm-sm-slot-62924-1465 workspace w1
+
+=== phase 1: two completed scouts used pool slot 1 in turn (real treehouse get in their own panes)
+  old-scout-a in-use pool entry: {"name":"1","owner_pid":true,"leased":null}
+  old-scout-a pane| luisgzz@Mac-mini-de-Luis folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home main
+  old-scout-a pane| ❯ cd '/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home' && treehouse get
+  old-scout-a pane| 🌳 Setting up worktree...
+  old-scout-a pane| 🌳 Entered worktree at /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/
+  old-scout-a pane| 1/home. Type 'exit' to return.
+  old-scout-b in-use pool entry: {"name":"1","owner_pid":true,"leased":null}
+  old-scout-b pane| luisgzz@Mac-mini-de-Luis folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home main
+  old-scout-b pane| ❯ cd '/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home' && treehouse get
+  old-scout-b pane| 🌳 Setting up worktree...
+  old-scout-b pane| 🌳 Entered worktree at /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/
+  old-scout-b pane| 1/home. Type 'exit' to return.
+PASS: both scouts were handed the same pool slot /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home
+  claim: task=old-scout-b home=/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home 
+  pool state: {"worktrees":[{"name":"1","path":"/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home","created_at":"2026-09-30T18:53:51.394734-06:00"}]}
+
+=== scenario: seed rollback returns its leased slot and drops only its own claim
+$ fm-home-seed.sh mate - --no-projects   (rc=1)
+  stderr| 🌳 Setting up worktree...
+  stderr| 🌳 Leased worktree at /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home. Run 'treehouse return /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home' to release it.
+  stderr| error: secondmate charter brief at /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home/data/mate/brief.md still contains {TASK}; fill it before seeding
+  stderr| 🌳 Worktree returned to pool.
+  pool-op| treehouse <get> <--lease> <--lease-holder> <mate>
+  pool-op| treehouse <return> <--force> </private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home>
+PASS: seed with a placeholder charter fails
+PASS: rollback really returned the leased slot (pool records no lease)
+PASS: rollback dropped its own claim
+PASS: rollback kept the replaced claim of old-scout-b as recovery evidence
+  claim: <absent>
+  prior: task=old-scout-b home=/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home 
+
+=== scenario: a fresh leased seed publishes the secondmate's slot-owner claim
+$ fm-home-seed.sh mate - --no-projects   (rc=0)
+  stdout| home=/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home
+  stderr| 🌳 Setting up worktree...
+  stderr| 🌳 Leased worktree at /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home. Run 'treehouse return /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home' to release it.
+  pool-op| treehouse <get> <--lease> <--lease-holder> <mate>
+PASS: seed succeeded
+PASS: seed leased the same pool slot the scouts used
+PASS: pool state records the durable lease held by mate
+PASS: slot-owner claim names mate and the registering home
+  claim: task=mate home=/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home 
+  pool entry: {"name":"1","leased":true,"lease_holder":"mate"}
+  slot markers: .fm-secondmate-home=mate, parent=parent_home=/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home
+
+=== scenario: stale completed scouts on the freshly seeded home finish records-only
+$ fm-teardown.sh old-scout-a   (rc=0)
+  stdout| teardown old-scout-a complete (window fm-lab-fm-sm-slot-62924-1465:w1:p2; pool slot /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home left to task mate (home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home), which it was reassigned to)
+  stdout| Backlog: old-scout-a just finished (this home keeps no markdown backlog at /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home/data/backlog.md). Update /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home/data/backlog.md - move old-scout-a to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due.
+  stderr| fm-gate-refuse: gate agent lifecycle permitted only against lab home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home
+  stderr| ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  stderr| ●  WATCHER DOWN - SUPERVISION IS OFF
+  stderr| ●  2 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+  stderr| ●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+  stderr| ●  This is a supervision warning only; the guarded operation WILL still run.
+  stderr| ●  watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn.
+  stderr| ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  stderr| warning: task old-scout-b's recorded worktree also names /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home, which is secondmate mate's proved persistent home; this cleanup touches nothing under it, so old-scout-b's record is left for its own cleanup.
+  stderr| warning: task old-scout-a's recorded worktree /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home was reassigned to task mate (home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home), which claimed that pool slot after this record was written; that slot is no longer old-scout-a's, so its processes, copy, and claim are left untouched and only old-scout-a's own cleanup runs.
+  pool-op| (no treehouse call)
+PASS: old-scout-a teardown finished
+PASS: old-scout-a record removed
+PASS: old-scout-a's own dead pane was closed
+PASS: no pool operation ran
+PASS: seeded home, lease, and claim byte-identical
+$ fm-teardown.sh old-scout-b   (rc=0)
+  stdout| teardown old-scout-b complete (window fm-lab-fm-sm-slot-62924-1465:w1:p3; pool slot /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home left to task mate (home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home), which it was reassigned to)
+  stdout| Backlog: old-scout-b just finished (this home keeps no markdown backlog at /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home/data/backlog.md). Update /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home/data/backlog.md - move old-scout-b to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due.
+  stderr| fm-gate-refuse: gate agent lifecycle permitted only against lab home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home
+  stderr| WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+  stderr| warning: task old-scout-b's recorded worktree /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home was reassigned to task mate (home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home), which claimed that pool slot after this record was written; that slot is no longer old-scout-b's, so its processes, copy, and claim are left untouched and only old-scout-b's own cleanup runs.
+  pool-op| (no treehouse call)
+PASS: old-scout-b teardown finished
+PASS: no pool operation ran
+PASS: seeded home, lease, and claim byte-identical
+PASS: lease still held by mate
+
+=== phase 4: legacy shape - the leased home's claim still names the scout that used it before
+  claim: task=old-scout-c home=/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home 
+$ fm-teardown.sh old-scout-c   (rc=1)
+  stderr| fm-gate-refuse: gate agent lifecycle permitted only against lab home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home
+  stderr| WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+  stderr| REFUSED: task old-scout-c's recorded worktree /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home is secondmate mate's leased persistent home, but that slot's owner claim still names old-scout-c; returning or resetting it would discard that home, so nothing was changed - not even with --force.
+  stderr| Reconcile the claim from its registering home (FM_HOME=/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home bin/fm-home-seed.sh claim-slot mate), then re-run teardown.
+  pool-op| (no treehouse call)
+PASS: ordinary teardown (plain) refuses the leased home whose claim is its own
+PASS: refusal (plain) names claim-slot mate
+PASS: refusal (plain) ran no pool operation
+PASS: refusal (plain) left home/lease/claim byte-identical
+PASS: refusal (plain) kept the record and the pane
+$ fm-teardown.sh old-scout-c --force   (rc=1)
+  stderr| fm-gate-refuse: gate agent lifecycle permitted only against lab home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home
+  stderr| WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+  stderr| REFUSED: task old-scout-c's recorded worktree /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home is secondmate mate's leased persistent home, but that slot's owner claim still names old-scout-c; returning or resetting it would discard that home, so nothing was changed - not even with --force.
+  stderr| Reconcile the claim from its registering home (FM_HOME=/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home bin/fm-home-seed.sh claim-slot mate), then re-run teardown.
+  pool-op| (no treehouse call)
+PASS: ordinary teardown (--force) refuses the leased home whose claim is its own
+PASS: refusal (--force) names claim-slot mate
+PASS: refusal (--force) ran no pool operation
+PASS: refusal (--force) left home/lease/claim byte-identical
+PASS: refusal (--force) kept the record and the pane
+$ fm-teardown.sh old-scout-c --force   (rc=1)
+  stderr| fm-gate-refuse: gate agent lifecycle permitted only against lab home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home
+  stderr| WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+  stderr| REFUSED: task old-scout-c's recorded worktree /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home is secondmate mate's leased persistent home, but that slot's owner claim still names no task; returning or resetting it would discard that home, so nothing was changed - not even with --force.
+  stderr| Reconcile the claim from its registering home (FM_HOME=/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home bin/fm-home-seed.sh claim-slot mate), then re-run teardown.
+  pool-op| (no treehouse call)
+PASS: ordinary forced teardown refuses the leased home with no claim at all
+PASS: absent-claim refusal ran no pool operation
+PASS: absent-claim refusal left the home in place
+
+=== scenario: claim-slot refuses when ownership proof fails (identity marker mismatch)
+$ fm-home-seed.sh claim-slot mate   (rc=1)
+  stderr| REFUSED: cannot prove /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home is secondmate mate's persistent home: /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home's secondmate identity marker names 'impostor', but its durable lease is held by 'mate'; nothing was changed
+  pool-op| (no treehouse call)
+PASS: claim-slot refused
+PASS: claim unchanged after refusal
+$ fm-home-seed.sh claim-slot ghost   (rc=1)
+  stderr| REFUSED: no registry binding for secondmate ghost; nothing was changed
+  pool-op| (no treehouse call)
+PASS: claim-slot for an unregistered id refused
+PASS: claim unchanged after refusal
+
+=== scenario: claim-slot reconciles the legacy claim; a retry is unchanged
+$ fm-home-seed.sh claim-slot mate   (rc=0)
+  stdout| slot-owner claim replaced: /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/.fm-slot-owner names task=mate home=/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home
+  pool-op| (no treehouse call)
+PASS: claim-slot succeeded
+PASS: claim-slot reported replaced
+PASS: claim now names mate
+PASS: prior claim kept at .prior
+PASS: claim-slot never touched the pool
+$ fm-home-seed.sh claim-slot mate   (rc=0)
+  stdout| slot-owner claim unchanged: /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/.fm-slot-owner names task=mate home=/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home
+  pool-op| (no treehouse call)
+PASS: repeated claim-slot reported unchanged
+
+=== scenario: after reconciliation the stale dead scout finishes without touching the home
+$ fm-teardown.sh old-scout-c   (rc=0)
+  stdout| teardown old-scout-c complete (window fm-lab-fm-sm-slot-62924-1465:w1:p4; pool slot /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home left to task mate (home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home), which it was reassigned to)
+  stdout| Backlog: old-scout-c just finished (this home keeps no markdown backlog at /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home/data/backlog.md). Update /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home/data/backlog.md - move old-scout-c to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due.
+  stderr| fm-gate-refuse: gate agent lifecycle permitted only against lab home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home
+  stderr| WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+  stderr| warning: task old-scout-c's recorded worktree /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home was reassigned to task mate (home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home), which claimed that pool slot after this record was written; that slot is no longer old-scout-c's, so its processes, copy, and claim are left untouched and only old-scout-c's own cleanup runs.
+  pool-op| (no treehouse call)
+PASS: old-scout-c teardown finished
+PASS: old-scout-c record removed
+PASS: no pool operation ran
+PASS: seeded home, lease, and claim byte-identical
+
+=== scenario (adversarial): a contradictory secondmate record naming the home still refuses
+$ fm-teardown.sh old-scout-d   (rc=1)
+  stderr| fm-gate-refuse: gate agent lifecycle permitted only against lab home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home
+  stderr| WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+  stderr| REFUSED: task old-scout-d's recorded worktree /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home is also task other-mate's recorded worktree.
+  stderr| Returning that pool slot would kill other-mate's processes and reset its copy, so nothing was changed - not even with --force.
+  stderr| Reconcile whichever record is wrong (bin/fm-crew-state.sh old-scout-d; bin/fm-crew-state.sh other-mate), then re-run teardown.
+  pool-op| (no treehouse call)
+PASS: teardown refused beside a contradictory secondmate record
+PASS: refusal names other-mate
+PASS: refusal left home/lease/claim byte-identical
+$ fm-teardown.sh old-scout-d   (rc=0)
+  stdout| teardown old-scout-d complete (window fm-lab-fm-sm-slot-62924-1465:w1:p5; pool slot /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home left to task mate (home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home), which it was reassigned to)
+  stdout| Backlog: old-scout-d just finished (this home keeps no markdown backlog at /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home/data/backlog.md). Update /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home/data/backlog.md - move old-scout-d to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due.
+  stderr| fm-gate-refuse: gate agent lifecycle permitted only against lab home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home
+  stderr| WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+  stderr| warning: task old-scout-d's recorded worktree /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home was reassigned to task mate (home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home), which claimed that pool slot after this record was written; that slot is no longer old-scout-d's, so its processes, copy, and claim are left untouched and only old-scout-d's own cleanup runs.
+  pool-op| (no treehouse call)
+PASS: with the contradiction gone, old-scout-d finishes
+PASS: and still touches nothing in the home
+
+=== phase 5: forced retirement of another secondmate whose stale child record names mate's leased home
+$ fm-home-seed.sh domain /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/domain --no-projects   (rc=0)
+  stdout| home=/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/domain
+  pool-op| (no treehouse call)
+PASS: plain-clone secondmate domain seeded
+  claim: task=stale-child home=/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/domain 
+$ fm-teardown.sh domain --force   (rc=1)
+  stderr| fm-gate-refuse: gate agent lifecycle permitted only against lab home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home
+  stderr| WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+  stderr| REFUSED: child stale-child's recorded worktree /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home shows a persistent secondmate home (a durable Treehouse lease or a secondmate marker) while its slot-owner claim names no other owner; forced teardown changed nothing - reconcile that home's claim with bin/fm-home-seed.sh claim-slot from its registering home first.
+  pool-op| (no treehouse call)
+PASS: forced parent teardown refused
+PASS: refusal names the persistent secondmate home
+PASS: refusal ran no pool operation
+PASS: refusal closed no pane
+PASS: mate's home, lease, and claim byte-identical
+PASS: domain record, home, and child record kept
+PASS: both panes still present
+$ fm-home-seed.sh claim-slot mate   (rc=0)
+  stdout| slot-owner claim replaced: /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/.fm-slot-owner names task=mate home=/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home
+  pool-op| (no treehouse call)
+PASS: claim-slot reconciles mate's claim
+$ fm-teardown.sh domain --force   (rc=0)
+  stdout| teardown domain complete (window fm-lab-fm-sm-slot-62924-1465:w1:p6, worktree /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/domain)
+  stderr| fm-gate-refuse: gate agent lifecycle permitted only against lab home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home
+  stderr| WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+  stderr| warning: task stale-child's recorded worktree /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home was reassigned to task mate (home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home), which claimed that pool slot after this record was written; that slot is no longer stale-child's, so its processes, copy, and claim are left untouched and only stale-child's own cleanup runs.
+  pool-op| (no treehouse call)
+PASS: with mate's claim reconciled, forced retirement of domain finishes
+PASS: domain's plain-clone home removed and its route dropped
+PASS: mate's leased home was never returned
+PASS: mate's home, lease, and claim byte-identical
+PASS: lease still held by mate
+
+=== phase 6: retire secondmate mate with the real fm-teardown.sh (real treehouse return)
+$ fm-teardown.sh mate   (rc=0)
+  stdout| 🌳 Worktree returned to pool.
+  stdout| teardown mate complete (window fm-lab-fm-sm-slot-62924-1465:w1:p8, worktree /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home)
+  stderr| fm-gate-refuse: gate agent lifecycle permitted only against lab home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home
+  stderr| WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+  pool-op| treehouse <return> <--force> </private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home>
+PASS: secondmate retirement finished
+PASS: retirement returned the home through real treehouse return
+PASS: pool now records slot 1 unleased
+PASS: retired markers stay in the returned slot (gitignored)
+  pool entry: {"name":"1","path":"/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home","created_at":"2026-09-30T18:53:51.394734-06:00"}
+  leftover markers: .fm-secondmate-home .fm-secondmate-parent 
+  claim: task=mate home=/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home 
+
+=== phase 7: an ordinary crewmate takes the returned slot with real treehouse get
+  next-crew in-use pool entry: {"name":"1","owner_pid":true,"leased":null}
+  next-crew pane| luisgzz@Mac-mini-de-Luis folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home main
+  next-crew pane| ❯ cd '/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home' && treehouse get
+  next-crew pane| 🌳 Setting up worktree...
+  next-crew pane| 🌳 Entered worktree at /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/
+  next-crew pane| 1/home. Type 'exit' to return.
+PASS: next-crew was handed the retired secondmate's slot
+  claim: task=next-crew home=/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home 
+
+=== regression check: the pre-review-fix library (727f692) strands this crewmate
+$ fm-teardown.sh next-crew   (rc=1)
+  stderr| fm-gate-refuse: gate agent lifecycle permitted only against lab home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home
+  stderr| WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+  stderr| REFUSED: task next-crew's recorded worktree /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home shows a persistent secondmate home (a durable Treehouse lease or a secondmate marker), but its ownership cannot be proved: no readable durable Treehouse lease is recorded for /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home. Returning or resetting it could discard that home, so nothing was changed - not even with --force.
+  stderr| Reconcile the home's lease, identity marker, parent binding, and registry route, then re-run teardown.
+  pool-op| (no treehouse call)
+PASS: pre-fix teardown refuses (the reported failure reproduces)
+PASS: pre-fix refusal is the unprovable-ownership refusal
+PASS: lab code restored to the target tree
+
+=== scenario: at the target commit the crewmate in the retired slot tears down normally
+$ fm-teardown.sh next-crew   (rc=0)
+  stdout| 🌳 Worktree returned to pool.
+  stdout| teardown next-crew complete (window fm-lab-fm-sm-slot-62924-1465:w1:p9, worktree /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home)
+  stdout| Backlog: next-crew just finished (this home keeps no markdown backlog at /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home/data/backlog.md). Update /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home/data/backlog.md - move next-crew to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due.
+  stderr| fm-gate-refuse: gate agent lifecycle permitted only against lab home /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/home
+  stderr| WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+  pool-op| treehouse <return> <--force> </private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home>
+PASS: next-crew teardown finished
+PASS: next-crew record removed
+PASS: the slot was returned through real treehouse return
+PASS: next-crew's own claim was released
+PASS: pool records slot 1 unleased and idle
+PASS: control pane untouched
+  pool entry: {"name":"1","path":"/private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68/th/.treehouse/home-dfdbce/1/home","created_at":"2026-09-30T18:53:51.394734-06:00"}
+
+=== teardown
+herdr lab session fm-lab-fm-sm-slot-62924-1465 torn down
+~/.treehouse listing unchanged by this run
+lab root /private/var/folders/03/zrsbyldx4k19mfyy2yzskl6c0000gn/T/fm-lab.FSDM68 removed
+FAILS=0

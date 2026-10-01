@@ -1,0 +1,4 @@
+evidence: herdr 0.9.1 endpoint states: shell-only=dead closed=missing registered-claude=alive unknown-status-claude=unreadable
+ok - real Herdr: a live or unreadable old endpoint keeps the duplicate-record refusal on a reconciled persistent home
+ok - real Herdr: completed scouts whose endpoints are dead or missing finish without touching the reconciled persistent home
+rc=0
