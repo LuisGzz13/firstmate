@@ -96,6 +96,7 @@ Each effective `FM_HOME` contains private operational directories.
 
 `projects/` holds local project clones.
 Firstmate reads these clones, but changes them only through the narrow guarded and concrete captain-approved exceptions in `AGENTS.md`.
+For secondmate clones, [`fm_treehouse_clone_pool_ensure` in `bin/fm-wake-lib.sh`](../bin/fm-wake-lib.sh) owns the spawn-managed `treehouse.toml` pool setting and preservation of existing project/operator configuration.
 Untracked files and directories whose names begin with `scratchpad` are also gitignored, so temporary scratch does not make porcelain-based secondmate sync guards treat a home as dirty.
 
 ### Format and lifecycle references

@@ -1452,18 +1452,19 @@ fm_treehouse_pool_slot() {  # <project-dir> <worktree>
 # belong to another home. The root home's clones keep Treehouse's default pool.
 # An independent clone directly under the projects/ of a home that carries a
 # secondmate parent binding (local or remote) gets a clone-local treehouse.toml
-# rooting its pools in a directory unique to that home, so its slots are always
-# its own worktrees; a linked-worktree project shares its repository's pool by
-# design and is left alone.
+# rooting its pools in a directory unique to that home, unless existing
+# configuration is foreign as defined below; a linked-worktree project shares
+# its repository's pool by design and is left alone.
 #
-# The file is Firstmate's only while its first line opens with the versioned
-# marker below: it is listed in the clone's info/exclude so the clone never
-# reads as changed, and is rewritten whenever its content drifts. A treehouse.toml that is tracked, a
-# symlink, not a regular file, or unmarked is someone else's configuration and
-# is never touched; bin/fm-spawn.sh's ownership check still refuses any task
-# copy that is not a worktree of the declared project.
+# An untracked regular file is Firstmate's only while its first line is the
+# versioned marker below or that marker followed by a colon: it is listed in
+# the clone's info/exclude so this setting does not make the clone read as
+# changed, and is rewritten whenever its content drifts. A treehouse.toml that
+# is tracked, a symlink, not a regular file, or unmarked is someone else's
+# configuration and is never touched; bin/fm-spawn.sh's ownership check still
+# refuses any Treehouse task copy that is not a worktree of the declared project.
 #
-# Sets FM_TREEHOUSE_CLONE_POOL to default (Treehouse's default pool applies),
+# Sets FM_TREEHOUSE_CLONE_POOL to default (no Firstmate pool override applies),
 # managed (the Firstmate file is in place), or foreign (an unmanaged
 # treehouse.toml decides). Returns non-zero with a message on stderr only when
 # the clone needs the file and it cannot be put in place.

@@ -163,11 +163,9 @@
 #   fm_firstmate_root_home resolves, so a home seeded from another machine anchors
 #   that lock itself rather than failing to resolve one;
 #   contention refuses rather than waits.
-#   Under that lock, after every preflight and before any endpoint exists, a
-#   spawn from a secondmate home's own projects/<name> clone gives the clone its
-#   own Treehouse pool (bin/fm-wake-lib.sh's fm_treehouse_clone_pool_ensure owns
-#   the rule and the Firstmate-managed, git-excluded treehouse.toml it writes),
-#   because Treehouse keys pools by repository name and origin, not by clone.
+#   Under that lock, after every preflight and before any endpoint exists,
+#   fresh Treehouse-backed ship/scout spawns call fm_treehouse_clone_pool_ensure
+#   in bin/fm-wake-lib.sh, which owns secondmate clone pool configuration.
 #   After `treehouse get`, a task copy whose git common dir is not the declared
 #   project's refuses the spawn for every harness, so a pool still shared with
 #   another clone can never launch a worker in that other clone's repository.
@@ -3188,11 +3186,13 @@ real_path_or_raw() { # <path>
 # that every downstream operation (send/capture/kill) already treats as opaque
 # per-backend routing (fm_backend_resolve_selector).
 
-# True when <path> is an isolated worktree of the spawning project: a real
-# directory that is its own worktree root, is not the spawning project itself,
-# and does not share the project repository's common git dir. SPAWN_WT_TOP is
-# left holding the worktree root the check read, and SPAWN_WT_REASON a short
-# phrase naming why a rejected path failed, both for the refusal messages.
+# True when <path> is isolated from the spawning project and its primary
+# checkout: a real directory that is its own worktree root, is not the spawning
+# project itself, and whose own git dir is not the project's common git dir.
+# This does not prove repository membership; validate_spawn_worktree_project
+# separately checks that for Treehouse task copies. SPAWN_WT_TOP is left holding
+# the worktree root the check read, and SPAWN_WT_REASON a short phrase naming why
+# a rejected path failed, both for the refusal messages.
 #
 # The worktree-discovery poll below reads this same predicate, so it can never
 # adopt a path the guard would then refuse. That matters because a pane's cwd
