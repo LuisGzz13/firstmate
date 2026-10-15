@@ -3307,6 +3307,32 @@ assert_contains "$wide" '"in_flight": 3' \
   "excluding note bodies must not change the count of in-flight work"
 pass "excluding a note body does not distort the counts"
 
+# --- live captain holds -----------------------------------------------------
+#
+# The live count drives the Beacon's white flash, so a hold deferred to a future
+# hold-until date must stay out of it while still counting as waiting overall.
+# Dates sit far from today so the case never depends on when it runs.
+
+LIVE_HOME="$TMP_ROOT/live-holds"
+mkdir -p "$LIVE_HOME/data" "$LIVE_HOME/state" "$LIVE_HOME/config"
+cat > "$LIVE_HOME/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] undated-call - Undated captain call (kind: captain) (hold: choose) (hold-kind: captain)
+- [ ] due-call - Captain call whose deferral has passed (kind: captain) (hold: choose) (hold-kind: captain) (hold-until: 2000-01-01)
+- [ ] later-call - Captain call deferred to later (kind: captain) (hold: choose) (hold-kind: captain) (hold-until: 2999-12-31)
+EOF
+for scope in counts full; do
+  live=$(python3 "$ROOT/bin/fm_voice_records.py" status --home "$LIVE_HOME" --scope "$scope") \
+    || fail "live-hold fixture failed at $scope scope"
+  assert_contains "$live" '"awaiting_captain": 3' \
+    "a deferred hold should still count as waiting on the captain at $scope scope"
+  assert_contains "$live" '"awaiting_captain_live": 2' \
+    "a hold deferred to a future date should leave the live count at $scope scope"
+done
+pass "the live captain count excludes only holds deferred to a future date"
+
 # --- the deny list ----------------------------------------------------------
 #
 # Reachable first, suppressed second. Without the first assertion the second

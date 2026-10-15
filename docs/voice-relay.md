@@ -170,6 +170,7 @@ If it fails before any audio, add `--verbose` and look for the handshake: a chat
 
 An unconfigured home gets the narrow scope: counts of what is in flight, what is waiting on the captain and what is open for review, with no identifier, title or link assembled at all.
 Widening that is one line the captain of those records writes into `config/voice-read-scope` themselves.
+What is waiting on the captain is counted twice: `awaiting_captain` is every captain hold, and `awaiting_captain_live` leaves out holds deferred to a future hold-until date, which matches what Captain's Call shows.
 Two whole classes of record are excluded at every scope, and excluded by construction rather than filtered on the way out:
 
 - **Finished work in the backlog's done history**, because a spoken "what is

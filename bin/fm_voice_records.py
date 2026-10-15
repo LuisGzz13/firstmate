@@ -92,6 +92,7 @@ as a tool result, so the shell form is the same interface the relay uses.
 """
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -411,6 +412,15 @@ def fleet_status(home=None, scope=None):
         if i["tags"].get("hold-kind") == "captain"
         or i["tags"].get("kind") == "captain"
     ]
+    # The live subset is what Captain's Call shows: a hold deferred to a future
+    # hold-until date is not yet the captain's to answer. Same rule as the
+    # fleet snapshot's "dated" bucket in bin/fm-fleet-snapshot.sh, which follows
+    # tasks-axi's contract that a hold is inactive on and after that UTC date.
+    today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    live_for_captain = [
+        i for i in held_for_captain
+        if i["tags"].get("hold-until", "").strip() <= today
+    ]
     # OPEN work only. _workers lists every state/*.meta in the home, and a task
     # keeps its meta after it is marked done until teardown removes it, so taking
     # every worker with a pull request would count and name finished tasks. That
@@ -440,6 +450,7 @@ def fleet_status(home=None, scope=None):
         "in_flight": len(in_flight),
         "queued": len(queued),
         "awaiting_captain": len(held_for_captain),
+        "awaiting_captain_live": len(live_for_captain),
         "open_pull_requests": len(with_pr),
         "captain_notes_waiting": waiting,
     }
