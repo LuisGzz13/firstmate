@@ -37,6 +37,13 @@
 #       session is already folded into bin/fm-crew-state.sh's verdict.
 #       A record carrying remote_host= prints "unknown -" without contacting
 #       that host.
+#       A herdr-backed record whose live session cannot be read prints
+#       "no-herdr -" when herdr is not on PATH and "unreadable -" when its
+#       server state does not answer or bin/fm-crew-state.sh reports the
+#       backend unreachable. Both are checked before the current-state read,
+#       whose server wait would otherwise outlast the caller's deadline, so
+#       the read returns at once. PATH is the caller's: herdr is never looked
+#       for anywhere else.
 #   fm-voice-fleet-states.sh primary <home>
 #       Print one line "- <session>", in the agent shape with no task state,
 #       where <session> is the busy verdict (busy, idle, unknown) of the
@@ -46,6 +53,8 @@
 #       environment, which only a process of the same user can read. A free,
 #       stale or unreadable lock, an unreadable environment, or a pane the
 #       backend cannot classify all print unknown; only busy means mid-turn.
+#       A herdr pane prints no-herdr or unreadable instead, exactly as for
+#       agent, when herdr is not on PATH or its server state cannot be read.
 #
 # Read-only: no lock, no write, no wake. Forge reads are disabled for the
 # current-state read (FM_CREW_STATE_NO_FORGE=1), so nothing here leaves this
@@ -80,13 +89,30 @@ meta_value() {  # <meta> <key>
   grep "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- || true
 }
 
+# The herdr server state of <session> (running, stopped), or no-herdr or
+# unreadable when it cannot be seen. One status call, never a server start.
+herdr_server() {  # <session>
+  local verdict
+  command -v herdr >/dev/null 2>&1 || { printf 'no-herdr'; return 0; }
+  # shellcheck source=bin/fm-backend.sh
+  . "$SCRIPT_DIR/fm-backend.sh"
+  fm_backend_source herdr || { printf 'unreadable'; return 0; }
+  verdict=$(fm_backend_herdr_server_running_state "$1")
+  case "$verdict" in running|stopped) printf '%s' "$verdict" ;; *) printf 'unreadable' ;; esac
+}
+
 agent() {  # <home> <id>
-  local home=$1 id=$2 state meta line word session=-
+  local home=$1 id=$2 state meta line word session=- window server
   state=${FM_STATE_OVERRIDE:-$home/state}
   meta="$state/$id.meta"
   if [ ! -f "$meta" ] || [ -n "$(meta_value "$meta" remote_host)" ]; then
     printf 'unknown -\n'
     return 0
+  fi
+  if [ "$(meta_value "$meta" backend)" = herdr ]; then
+    window=$(meta_value "$meta" window)
+    server=$(herdr_server "${window%%:*}")
+    case "$server" in no-herdr|unreadable) printf '%s -\n' "$server"; return 0 ;; esac
   fi
   line=$(FM_HOME=$home FM_STATE_OVERRIDE=$state FM_CREW_STATE_NO_FORGE=1 FM_OPEN_DECISIONS_CURSOR_PEEK=1 \
     "$SCRIPT_DIR/fm-crew-state.sh" "$id" 2>/dev/null </dev/null || true)
@@ -94,6 +120,11 @@ agent() {  # <home> <id>
   word=${word%% *}
   case "$line" in "state: "*) ;; *) word=unknown ;; esac
   [ -n "$word" ] || word=unknown
+  case "$line" in *"backend unreachable (herdr "*)
+    printf 'unreadable -\n'
+    return 0
+    ;;
+  esac
   if [ "$(meta_value "$meta" kind)" = secondmate ]; then
     # shellcheck source=bin/fm-backend.sh
     . "$SCRIPT_DIR/fm-backend.sh"
@@ -140,6 +171,16 @@ primary() {  # <home>
   fi
   # shellcheck source=bin/fm-backend.sh
   . "$SCRIPT_DIR/fm-backend.sh"
+  if [ "$backend" = herdr ]; then
+    # A stopped server has no session to be busy, and the busy read would
+    # start one; one that cannot be seen is unreadable rather than idle.
+    case "$(herdr_server "${target%%:*}")" in
+      running) ;;
+      stopped) printf -- '- unknown\n'; return 0 ;;
+      no-herdr) printf -- '- no-herdr\n'; return 0 ;;
+      *) printf -- '- unreadable\n'; return 0 ;;
+    esac
+  fi
   verdict=$(fm_backend_busy_state "$backend" "$target" 2>/dev/null </dev/null || true)
   case "$verdict" in busy|idle) ;; *) verdict=unknown ;; esac
   printf -- '- %s\n' "$verdict"

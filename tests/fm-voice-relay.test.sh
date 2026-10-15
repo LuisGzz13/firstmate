@@ -4989,4 +4989,72 @@ assert_equals "$((long_after - long_before))" "$long_folded" \
 assert_equals "$cursor_sum" "$(cksum < "$long_cursor")" "the fleet read must not rewrite the cursor"
 pass "a long status log is read from its existing cursor, bounded by new appends, without a write"
 
+# A live session the counts depend on cannot be read: herdr is missing from
+# the caller's PATH (launchd's bare PATH, where the Beacon reader once took
+# four seconds and answered fleet_working=0, a false green), or a herdr call
+# fails. Both counts must read as unknown, never as 0, and the read must
+# return well inside the deadline rather than waiting it out.
+assert_not_contains "$(fleet_read)" fleet_unknown_reason \
+  "a fully readable fleet must keep the plain count shape"
+fleet_unknown() {  # <json> <reason-fragment> <label>
+  printf '%s' "$1" | python3 -c '
+import json, sys
+got = json.load(sys.stdin)
+ok = (got.get("fleet_working", 0) is None and got.get("fleet_stuck", 0) is None
+      and sys.argv[1] in (got.get("fleet_unknown_reason") or ""))
+sys.exit(0 if ok else 1)' "$2" || fail "$3: $1"
+}
+fleet_timed() {  # <path> -> json; seconds on fd 3
+  local started out
+  started=$(python3 -c 'import time; print(time.monotonic())')
+  out=$(PATH="$1" FM_FAKE_FLEET_AGENTS="$FLEET_AGENTS" FM_FAKE_FLEET_SSH_LOG="$FLEET_SSH_LOG" \
+    "$FLEET_PYTHON" "$ROOT/bin/fm_voice_records.py" status --home "$FLEET_MAIN" --scope counts) || return 1
+  python3 -c 'import sys, time; print("%.2f" % (time.monotonic() - float(sys.argv[1])))' "$started" >&3
+  printf '%s' "$out"
+}
+FLEET_PYTHON=$(command -v python3)
+# PATH with every herdr removed: a directory that holds one is replaced by a
+# mirror of everything else in it, so the rest of the toolchain still resolves.
+FLEET_NOHERDR="$FLEET/noherdr"
+mkdir -p "$FLEET_NOHERDR/fake"
+ln -sf "$FLEET_BIN/no-mistakes" "$FLEET_NOHERDR/fake/no-mistakes"
+ln -sf "$FLEET_BIN/ssh" "$FLEET_NOHERDR/fake/ssh"
+noherdr_path="$FLEET_NOHERDR/fake"
+mirror=0
+old_ifs=$IFS
+IFS=:
+for dir in $PATH; do
+  [ -n "$dir" ] && [ "$dir" != "$FLEET_BIN" ] || continue
+  if [ -x "$dir/herdr" ]; then
+    mirror=$((mirror + 1))
+    mkdir -p "$FLEET_NOHERDR/$mirror"
+    for entry in "$dir"/*; do
+      [ "${entry##*/}" = herdr ] || ln -sf "$entry" "$FLEET_NOHERDR/$mirror/${entry##*/}"
+    done
+    dir="$FLEET_NOHERDR/$mirror"
+  fi
+  noherdr_path="$noherdr_path:$dir"
+done
+IFS=$old_ifs
+PATH="$noherdr_path" command -v herdr >/dev/null 2>&1 && fail "the test PATH still resolves herdr"
+fleet_out=$(fleet_timed "$noherdr_path" 3>"$FLEET/noherdr.secs") || fail "the fleet read failed without herdr: $fleet_out"
+fleet_unknown "$fleet_out" "herdr is not on PATH" "herdr missing from PATH must read as unknown, not 0"
+python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 2.0 else 1)' "$(cat "$FLEET/noherdr.secs")" \
+  || fail "the read without herdr must return at once, not wait out the deadline: $(cat "$FLEET/noherdr.secs")s"
+pass "herdr missing from PATH reads both fleet counts as unknown, at once"
+
+# Every herdr call errors, as a herdr that cannot reach its server does.
+mkdir -p "$FLEET/failbin"
+cat > "$FLEET/failbin/herdr" <<'SH'
+#!/usr/bin/env bash
+printf 'error: herdr cannot reach its server\n' >&2
+exit 1
+SH
+chmod +x "$FLEET/failbin/herdr"
+fleet_out=$(fleet_timed "$FLEET/failbin:$FLEET_BIN:$PATH" 3>"$FLEET/fail.secs") || fail "the fleet read failed: $fleet_out"
+fleet_unknown "$fleet_out" "a herdr read failed" "a failing herdr call must read as unknown, not 0"
+python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 2.0 else 1)' "$(cat "$FLEET/fail.secs")" \
+  || fail "a failing herdr must be seen before the server wait: $(cat "$FLEET/fail.secs")s"
+pass "a failing herdr call reads both fleet counts as unknown"
+
 printf 'all voice relay cases passed\n'

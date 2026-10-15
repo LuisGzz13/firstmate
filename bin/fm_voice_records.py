@@ -89,8 +89,11 @@ bin/fm-crew-state.sh, a second mate's session and this home's primary session
 through their busy verdicts, so a mid-turn session counts as working whatever its
 log last said, and a declared pause, a decision waiting or an idle session counts
 as neither. bin/fm-voice-fleet-states.sh owns each read; fleet_activity below runs
-them together under one deadline. The spoken answer leaves them out, because it
-is read on every question and the current-state read is the slow one.
+them together under one deadline. When a live session they depend on cannot be
+read at all - herdr not on this process's PATH, or a herdr call failing - both
+are null and fleet_unknown_reason says why, because a zero there would read as
+idle. The spoken answer leaves them out, because it is read on every question
+and the current-state read is the slow one.
 
 bin/fm-inbox.sh `status` is the human rendering of the same records and stays
 the owner of that. This module exists because a spoken answer needs a machine
@@ -175,6 +178,13 @@ FLEET_WORKING_STATE = "working"
 FLEET_STUCK_STATES = ("blocked", "failed")
 FLEET_BUSY_SESSION = "busy"
 FLEET_BUDGET_SECONDS = 4.0
+# A read that could not see a live session at all, and why. Any one of them
+# makes both counts unknown: the rest of the fleet cannot vouch for the agent
+# that went unseen.
+FLEET_UNREADABLE = {
+    "no-herdr": "herdr is not on PATH, so live sessions cannot be read",
+    "unreadable": "a herdr read failed, so live sessions cannot be read",
+}
 
 
 class RecordError(Exception):
@@ -462,9 +472,11 @@ def fleet_activity(home=None, root=None):
 
     Every read runs at once and the whole set shares one deadline, because the
     caller is a button press: a read that has not answered by then counts
-    toward neither figure rather than holding the answer back. Nothing here
-    takes a lock, writes a record, wakes firstmate or reaches the network; see
-    bin/fm-voice-fleet-states.sh, which owns what each read asks.
+    toward neither figure rather than holding the answer back. A read that
+    reports its live session unreadable (FLEET_UNREADABLE) makes both figures
+    None, with fleet_unknown_reason, and stops the reads still running.
+    Nothing here takes a lock, writes a record, wakes firstmate or reaches the
+    network; see bin/fm-voice-fleet-states.sh, which owns what each read asks.
     """
     home = home or default_home()
     root = root or os.path.dirname(os.path.abspath(__file__))
@@ -484,8 +496,11 @@ def fleet_activity(home=None, root=None):
         except OSError:
             continue
     deadline = time.monotonic() + FLEET_BUDGET_SECONDS
+    reason = None
     for proc in running:
         try:
+            if reason is not None:
+                raise subprocess.TimeoutExpired(proc.args, 0)
             out, _ = proc.communicate(timeout=max(0.0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
             try:
@@ -497,17 +512,25 @@ def fleet_activity(home=None, root=None):
         words = (out or "").split()
         state = words[0] if words else "unknown"
         session = words[1] if len(words) > 1 else "-"
+        unseen = FLEET_UNREADABLE.get(state) or FLEET_UNREADABLE.get(session)
+        if unseen:
+            reason = unseen
+            continue
         if state == FLEET_WORKING_STATE or session == FLEET_BUSY_SESSION:
             working += 1
         if state in FLEET_STUCK_STATES:
             stuck += 1
+    if reason is not None:
+        return {"fleet_working": None, "fleet_stuck": None,
+                "fleet_unknown_reason": reason}
     return {"fleet_working": working, "fleet_stuck": stuck}
 
 
 def fleet_status(home=None, scope=None, fleet=False):
     """Return the status answer the voice agent is allowed to give.
 
-    fleet=True adds fleet_working and fleet_stuck (see fleet_activity). It is
+    fleet=True adds fleet_working and fleet_stuck, or both None with
+    fleet_unknown_reason (see fleet_activity). It is
     off here because the spoken answer is read on every question and the fleet
     read costs a current-state read per agent; the `status` command, which the
     Beacon status button runs, turns it on.
