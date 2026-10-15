@@ -884,12 +884,7 @@ _fm_decision_fold_line() {  # <open-set> <status-line> <resolve-verb> <held-verb
 # most-recently-opened-last order; prints nothing when none are open. Reads the
 # status file, plus its sibling `.meta` for the task kind the terminal rule needs
 # when the caller passes no <kind>; no globals beyond the optional
-# FM_CLASSIFY_RESOLVE_VERB override and the FM_OPEN_DECISIONS_CURSOR_PEEK opt-in.
-# FM_OPEN_DECISIONS_CURSOR_PEEK=1 lets a read-only caller that cannot afford a
-# whole-file fold of a long log (bin/fm-voice-fleet-states.sh) answer from the
-# incremental fold's persisted cursor instead, through
-# _fm_open_decisions_cursor_peek: the same set, never a cursor write, and the
-# whole-file fold whenever the cursor cannot serve. This is the durable open-set the fleet
+# FM_CLASSIFY_RESOLVE_VERB override. This is the durable open-set the fleet
 # snapshot and any point-in-time consumer must use instead of trusting the last
 # status line.
 # The scan_open_decisions wrapper below enumerates a whole directory rather than
@@ -902,11 +897,6 @@ status_open_decisions() {  # <status-file> [<kind>]
   local f=$1 kind=${2:-} line resolve held open='' verb
   [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 0
   kind=$(_fm_status_kind "$f" "$kind")
-  if [ "${FM_OPEN_DECISIONS_CURSOR_PEEK:-0}" = 1 ] \
-    && open=$(_fm_open_decisions_cursor_peek "$f" "$kind"); then
-    printf '%s' "$open"
-    return 0
-  fi
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
   held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
   while IFS= read -r line || [ -n "$line" ]; do
@@ -1277,15 +1267,16 @@ _fm_status_read_span() {  # <status-file> <start-offset> <byte-length>
   ' "$f" "$start" "$length"
 }
 
-# Parse the persisted cursor at <cursor-file> against <fold-version>, the one
-# reading shared by the incremental fold below and the read-only cursor peek in
-# status_open_decisions. Sets _FM_ODC_VERSION (empty unless the cursor's version
-# matches), _FM_ODC_OFFSET, _FM_ODC_IDENT, _FM_ODC_OPEN (the persisted set as
-# read) and _FM_ODC_TRUSTED (that set, only when version and identity are
-# both present). Reads the cursor only; writes nothing.
-_fm_open_decisions_cursor_load() {  # <cursor-file> <fold-version>
-  local cf=$1 fold_version=$2 cursor_data='' first rest offset_line ident_line
-  local version='' offset=0 ident='' open='' trusted_open=''
+status_open_decisions_incremental() {  # <status-file> [<captured-end-offset>]
+  local f=$1 captured_end=${2:-} cf offset ident open='' trusted_open='' cursor_data first rest offset_line ident_line
+  local version='' size actual_size cur_ident resolve held chunk_file chunk_size line cursor_dirty=0
+  local target_cursor kind fold_version
+  [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 0
+  kind=$(_fm_status_kind "$f")
+  fold_version="$FM_OPEN_DECISIONS_FOLD_VERSION:$kind"
+  cf=$(_fm_open_decisions_cursor_path "$f")
+  offset=0
+  ident=''
   if [ -f "$cf" ] && [ -r "$cf" ] && [ ! -L "$cf" ]; then
     cursor_data=$(LC_ALL=C command cat "$cf" 2>/dev/null) || cursor_data=''
   fi
@@ -1326,64 +1317,6 @@ _fm_open_decisions_cursor_load() {  # <cursor-file> <fold-version>
           ;;
       esac
   fi
-
-  _FM_ODC_VERSION=$version
-  _FM_ODC_OFFSET=$offset
-  _FM_ODC_IDENT=$ident
-  _FM_ODC_OPEN=$open
-  _FM_ODC_TRUSTED=$trusted_open
-}
-
-# Read-only use of the incremental fold's cursor: the persisted open set, plus
-# the bytes appended since it was written folded in memory through the same
-# _fm_decision_fold_line rule, so the answer is the one
-# status_open_decisions_incremental would give without its cursor rewrite.
-# Returns 1, printing nothing, whenever the cursor cannot vouch for the file -
-# absent, a different fold version or kind, a different file identity, a shrunk
-# file, or any read failure - so the caller falls back to the whole-file fold.
-# Writes nothing, not even the incremental fold's scratch chunk.
-_fm_open_decisions_cursor_peek() {  # <status-file> <kind>
-  local f=$1 kind=$2 cur_ident size span line resolve held open
-  _fm_open_decisions_cursor_load "$(_fm_open_decisions_cursor_path "$f")" \
-    "$FM_OPEN_DECISIONS_FOLD_VERSION:$kind"
-  [ -n "$_FM_ODC_VERSION" ] && [ -n "$_FM_ODC_IDENT" ] || return 1
-  cur_ident=$(_fm_open_decisions_file_ident "$f") || return 1
-  [ "$cur_ident" = "$_FM_ODC_IDENT" ] || return 1
-  size=$(_fm_status_file_size "$f") || return 1
-  size=${size//[[:space:]]/}
-  case "$size" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$_FM_ODC_OFFSET" -le "$size" ] || return 1
-  open=$_FM_ODC_TRUSTED
-  # The same test-only seam the incremental fold records its folded bytes in.
-  [ -n "${FM_OPEN_DECISIONS_READ_PROBE:-}" ] \
-    && printf '%s\t%s\n' "$f" "$((size - _FM_ODC_OFFSET))" >> "$FM_OPEN_DECISIONS_READ_PROBE"
-  if [ "$_FM_ODC_OFFSET" -lt "$size" ]; then
-    span=$(_fm_status_read_span "$f" "$_FM_ODC_OFFSET" "$((size - _FM_ODC_OFFSET))") || return 1
-    resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
-    held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
-    while IFS= read -r line || [ -n "$line" ]; do
-      open=$(_fm_decision_fold_line "$open" "$line" "$resolve" "$held" "$kind")
-    done <<SPAN
-$span
-SPAN
-  fi
-  printf '%s' "$open"
-}
-
-status_open_decisions_incremental() {  # <status-file> [<captured-end-offset>]
-  local f=$1 captured_end=${2:-} cf offset ident open='' trusted_open=''
-  local version='' size actual_size cur_ident resolve held chunk_file chunk_size line cursor_dirty=0
-  local target_cursor kind fold_version
-  [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 0
-  kind=$(_fm_status_kind "$f")
-  fold_version="$FM_OPEN_DECISIONS_FOLD_VERSION:$kind"
-  cf=$(_fm_open_decisions_cursor_path "$f")
-  _fm_open_decisions_cursor_load "$cf" "$fold_version"
-  version=$_FM_ODC_VERSION
-  offset=$_FM_ODC_OFFSET
-  ident=$_FM_ODC_IDENT
-  open=$_FM_ODC_OPEN
-  trusted_open=$_FM_ODC_TRUSTED
 
   # A stat/size-read failure is a genuine I/O error, not "the file is empty" -
   # report the already-trusted persisted set unchanged rather than risking a
@@ -2807,3 +2740,7 @@ stale_is_terminal() {  # <window> <state>
   last=$(last_status_line "$state/$(window_to_task "$win" "$state").status")
   [ -n "$last" ] && status_is_captain_relevant "$last"
 }
+
+# Local layer (docs/local-layer.md): absent upstream, so nothing is sourced there.
+# shellcheck source=bin/fm-local-classify-lib.sh
+[ ! -r "$_FM_CLASSIFY_LIB_DIR/fm-local-classify-lib.sh" ] || . "$_FM_CLASSIFY_LIB_DIR/fm-local-classify-lib.sh"

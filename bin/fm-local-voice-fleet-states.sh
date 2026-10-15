@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# fm-voice-fleet-states.sh - one agent's current state, for the fleet counts in
-# bin/fm_voice_records.py (fleet_working, fleet_stuck).
+# fm-local-voice-fleet-states.sh - one agent's current state, for the fleet counts in
+# bin/fm_local_voice_records.py (fleet_working, fleet_stuck), part of the local
+# layer (docs/local-layer.md).
 #
 # This script decides nothing itself. Each answer comes from the owner of that
 # question, so the counts cannot drift from what supervision reads:
@@ -8,8 +9,9 @@
 #   - a task's current state from bin/fm-crew-state.sh, never from the last
 #     line of its status log; FM_OPEN_DECISIONS_CURSOR_PEEK=1 lets its fold of
 #     open decisions answer from the cursor that home's own drain keeps
-#     (bin/fm-classify-lib.sh), so a log grown over weeks is not refolded from
-#     its first byte on every button press, and nothing is written,
+#     (bin/fm-local-classify-lib.sh, over bin/fm-classify-lib.sh's fold), so a
+#     log grown over weeks is not refolded from its first byte on every button
+#     press, and nothing is written,
 #   - a second mate session's busy verdict from bin/fm-busy-lib.sh
 #     (fm_busy_classify_meta), the semantic busy-state contract,
 #   - the primary session's process from bin/fm-session-lock-lib.sh
@@ -18,14 +20,14 @@
 #     (fm_backend_busy_state).
 #
 # Usage:
-#   fm-voice-fleet-states.sh homes <home>
+#   fm-local-voice-fleet-states.sh homes <home>
 #       Print one "<second-mate-home>" line per registered LOCAL second mate in
 #       <home>'s data/secondmates.md (FM_DATA_OVERRIDE honoured) whose state
 #       directory is readable.
 #       A remote route, a record the registry parser rejects, and an unreadable
 #       home are skipped silently: the counts are a best-effort read, and one
 #       missing home must not fail the read of every other.
-#   fm-voice-fleet-states.sh agent <home> <id>
+#   fm-local-voice-fleet-states.sh agent <home> <id>
 #       Print one line "<state> <session>" for the task recorded at
 #       <home>/state/<id>.meta (FM_STATE_OVERRIDE honoured, as for primary).
 #       <state> is the state word bin/fm-crew-state.sh prints (working,
@@ -44,7 +46,7 @@
 #       whose server wait would otherwise outlast the caller's deadline, so
 #       the read returns at once. PATH is the caller's: herdr is never looked
 #       for anywhere else.
-#   fm-voice-fleet-states.sh primary <home>
+#   fm-local-voice-fleet-states.sh primary <home>
 #       Print one line "- <session>", in the agent shape with no task state,
 #       where <session> is the busy verdict (busy, idle, unknown) of the
 #       firstmate session holding <home>'s session lock. The pane is discovered exactly as the
@@ -65,7 +67,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-  echo "usage: fm-voice-fleet-states.sh homes <home> | agent <home> <id> | primary <home>" >&2
+  echo "usage: fm-local-voice-fleet-states.sh homes <home> | agent <home> <id> | primary <home>" >&2
   exit 2
 }
 

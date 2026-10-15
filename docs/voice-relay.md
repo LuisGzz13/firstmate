@@ -170,7 +170,6 @@ If it fails before any audio, add `--verbose` and look for the handshake: a chat
 
 An unconfigured home gets the narrow scope: counts of what is in flight, what is waiting on the captain and what is open for review, with no identifier, title or link assembled at all.
 Widening that is one line the captain of those records writes into `config/voice-read-scope` themselves.
-What is waiting on the captain is counted twice: `awaiting_captain` is every captain hold, and `awaiting_captain_live` leaves out holds deferred to a future hold-until date, which matches what Captain's Call shows.
 Two whole classes of record are excluded at every scope, and excluded by construction rather than filtered on the way out:
 
 - **Finished work in the backlog's done history**, because a spoken "what is
@@ -178,24 +177,10 @@ Two whole classes of record are excluded at every scope, and excluded by constru
 - **Free-form note bodies**, because they are written for someone with the whole
   file in front of them, and they are where commercial detail gets quoted.
 
-Only open work and this home's own runtime records are ever assembled, apart from two fleet counts that are integers only.
+Only open work and this home's own runtime records are ever assembled.
 A task keeps its runtime record until teardown, so the count of workers on deck
 and the states beside it still include one whose item is already done; both are a
 number and a state word, never anything written in a record.
-Those states are the last recorded event, which is history rather than a live check.
-
-The `fm_voice_records.py status` command, which the Beacon status button runs, also returns `fleet_working` and `fleet_stuck` at every scope.
-They count agents across this home and every registered local second mate home, the second mates themselves and this home's own firstmate session included, by their current state rather than their last event.
-`fleet_working` counts each agent that `bin/fm-crew-state.sh` reads as working now, plus each session that is mid-turn, so a busy second mate counts whatever its status log last said.
-`fleet_stuck` counts each agent that reads blocked or failed now; a declared pause, a decision waiting on the captain, and an idle session count toward neither.
-A remote or unreadable second mate home is skipped, and the read takes no lock, writes nothing, wakes nobody and reaches no other host.
-Every read runs at once under one four-second deadline, and an agent that has not answered by then counts toward neither.
-When a live session the counts depend on cannot be read at all - `herdr` is not on the reader's `PATH`, or a `herdr` call fails - both are JSON `null` rather than 0, and `fleet_unknown_reason` carries a short reason; a consumer treats that as unknown, never idle.
-The missing tool is detected before any `herdr` call, so that answer returns at once, and `herdr` is looked for only on the `PATH` the caller gives, so a caller under launchd's bare `PATH` must supply one that includes it.
-`fleet_unknown_reason` is absent whenever both counts are numbers.
-A long status log is read from the open-decisions cursor its home's own drain keeps, plus only the lines appended since, so its length does not set the cost.
-On the captain's Mac mini on 2026-10-14, with twelve agents across three homes, the whole read took 0.50 to 0.53 seconds.
-The spoken answer leaves both counts out, because it is read on every question.
 Verified against the captain's live records on 2026-08-21: every occurrence of
 the one customer identifier those records contain sits in finished work or a note
 body, so nothing a status answer can say names a customer.

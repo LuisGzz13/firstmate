@@ -397,6 +397,14 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/local-layer.md",
+      "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/local-voice-records.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/orca-backend.md",
       "audience": "operator-current"
     },
