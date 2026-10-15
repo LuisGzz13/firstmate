@@ -21,7 +21,9 @@ an idle session counts as neither. bin/fm-local-voice-fleet-states.sh owns each
 read; fleet_activity below runs them together under one deadline. When a live
 session they depend on cannot be read at all - herdr not on this process's
 PATH, or a herdr call failing - both are null and fleet_unknown_reason says
-why, because a zero there would read as idle. The spoken answer leaves them
+why, because a zero there would read as idle. The same holds when any one
+read misses the deadline or fails: the counts would silently leave that agent
+out, so they are unknown rather than low. The spoken answer leaves them
 out, because it is read on every question and the current-state read is the
 slow one.
 
@@ -52,6 +54,10 @@ FLEET_UNREADABLE = {
     "no-herdr": "herdr is not on PATH, so live sessions cannot be read",
     "unreadable": "a herdr read failed, so live sessions cannot be read",
 }
+# An agent whose read gave no answer at all is unseen the same way.
+FLEET_LATE = ("an agent's state read missed the %g s deadline, so the counts are incomplete"
+              % FLEET_BUDGET_SECONDS)
+FLEET_FAILED = "an agent's state read failed, so the counts are incomplete"
 
 
 def with_live_captain_holds(answer, held_for_captain):
@@ -134,10 +140,13 @@ def fleet_activity(home, state_dir, root=None):
     """Return fleet_working and fleet_stuck across every local home.
 
     Every read runs at once and the whole set shares one deadline, because the
-    caller is a button press: a read that has not answered by then counts
-    toward neither figure rather than holding the answer back. A read that
-    reports its live session unreadable (FLEET_UNREADABLE) makes both figures
-    None, with fleet_unknown_reason, and stops the reads still running.
+    caller is a button press: a read that has not answered by then is stopped
+    rather than holding the answer back. Such a late read (FLEET_LATE), a read
+    that could not start or gave no answer (FLEET_FAILED), and a read that
+    reports its live session unreadable (FLEET_UNREADABLE) each make both
+    figures None, with fleet_unknown_reason, and stop the reads still running:
+    a count missing one agent could read as idle while that agent works or is
+    stuck.
     Nothing here takes a lock, writes a record, wakes firstmate or reaches the
     network; see bin/fm-local-voice-fleet-states.sh, which owns what each read
     asks.
@@ -148,6 +157,7 @@ def fleet_activity(home, state_dir, root=None):
     if not os.access(helper, os.X_OK):
         return {"fleet_working": working, "fleet_stuck": stuck}
     running = []
+    reason = None
     for argv, env in _fleet_jobs(home, helper, state_dir):
         try:
             # Its own process group, so a read past the deadline is stopped
@@ -157,9 +167,8 @@ def fleet_activity(home, state_dir, root=None):
                 stderr=subprocess.DEVNULL, env=env, text=True,
                 start_new_session=True))
         except OSError:
-            continue
+            reason = reason or FLEET_FAILED
     deadline = time.monotonic() + FLEET_BUDGET_SECONDS
-    reason = None
     for proc in running:
         try:
             if reason is not None:
@@ -171,9 +180,13 @@ def fleet_activity(home, state_dir, root=None):
             except OSError:
                 proc.kill()
             proc.communicate()
+            reason = reason or FLEET_LATE
             continue
         words = (out or "").split()
-        state = words[0] if words else "unknown"
+        if proc.returncode != 0 or not words:
+            reason = FLEET_FAILED
+            continue
+        state = words[0]
         session = words[1] if len(words) > 1 else "-"
         unseen = FLEET_UNREADABLE.get(state) or FLEET_UNREADABLE.get(session)
         if unseen:

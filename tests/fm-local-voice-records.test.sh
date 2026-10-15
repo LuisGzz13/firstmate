@@ -110,6 +110,11 @@ set -u
 pane_status() {
   awk -v p="$1" '$1 == p { s = $2 } END { print s }' "$FM_FAKE_FLEET_AGENTS" 2>/dev/null
 }
+# A call naming the pane in $FM_FAKE_FLEET_SLOW hangs, as one agent's read does
+# on a loaded host, so its read misses the fleet deadline.
+for arg in "$@"; do
+  case "$arg" in *"${FM_FAKE_FLEET_SLOW:-<none>}"*) sleep 30 ;; esac
+done
 case "${1:-} ${2:-}" in
   "status --json") printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n' ;;
   "pane get") printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "${3:-}" ;;
@@ -182,7 +187,7 @@ cat > "$FLEET_MAIN/data/secondmates.md" <<EOF
 EOF
 
 fleet_read() {  # [scope]
-  PATH="$FLEET_BIN:$PATH" FM_FAKE_FLEET_AGENTS="$FLEET_AGENTS" FM_FAKE_FLEET_SSH_LOG="$FLEET_SSH_LOG" \
+  PATH="$FLEET_BIN:$PATH" FM_FAKE_FLEET_SLOW="${FLEET_SLOW:-}" FM_FAKE_FLEET_AGENTS="$FLEET_AGENTS" FM_FAKE_FLEET_SSH_LOG="$FLEET_SSH_LOG" \
     python3 "$ROOT/bin/fm_voice_records.py" status --home "$FLEET_MAIN" --scope "${1:-counts}"
 }
 fleet_field() {  # <json> <field>
@@ -333,5 +338,42 @@ fleet_unknown "$fleet_out" "a herdr read failed" "a failing herdr call must read
 python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 2.0 else 1)' "$(cat "$FLEET/fail.secs")" \
   || fail "a failing herdr must be seen before the server wait: $(cat "$FLEET/fail.secs")s"
 pass "a failing herdr call reads both fleet counts as unknown"
+
+# One agent's read misses the deadline, as under load at background priority:
+# the busy second mate worker's herdr calls hang. Dropping it from both counts
+# lowered fleet_working and could read a false green; the counts must read as
+# unknown instead, while the read still returns soon after the deadline.
+set_pane wS:p1 working
+fleet_out=$(fleet_read) || fail "the fleet read failed: $fleet_out"
+assert_equals 2 "$(fleet_field "$fleet_out" fleet_working)" "the fixture should start with two working"
+started=$(python3 -c 'import time; print(time.monotonic())')
+fleet_out=$(FLEET_SLOW=wA:p1 fleet_read) || fail "the fleet read failed with a slow agent: $fleet_out"
+slow_secs=$(python3 -c 'import sys, time; print("%.2f" % (time.monotonic() - float(sys.argv[1])))' "$started")
+fleet_unknown "$fleet_out" "missed the" "an agent past the deadline must read as unknown, not a lower count"
+python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 6.0 else 1)' "$slow_secs" \
+  || fail "a slow agent must not hold the read past the deadline: ${slow_secs}s"
+pass "an agent whose read misses the deadline reads both fleet counts as unknown"
+
+# One agent's read fails outright, with no answer: the reader crashed. Its
+# agent is unseen just as a late one is, so the counts must not drop it.
+FAILROOT="$FLEET/failroot"
+mkdir -p "$FAILROOT"
+cat > "$FAILROOT/fm-local-voice-fleet-states.sh" <<SH
+#!/usr/bin/env bash
+case "\$1 \${3:-}" in
+  "agent sw-work") exit 1 ;;
+esac
+exec "$ROOT/bin/fm-local-voice-fleet-states.sh" "\$@"
+SH
+chmod +x "$FAILROOT/fm-local-voice-fleet-states.sh"
+fleet_out=$(PATH="$FLEET_BIN:$PATH" FM_FAKE_FLEET_AGENTS="$FLEET_AGENTS" FM_FAKE_FLEET_SSH_LOG="$FLEET_SSH_LOG" \
+  python3 -c '
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "bin"))
+import fm_local_voice_records as m
+print(json.dumps(m.fleet_activity(sys.argv[2], lambda h: os.path.join(h, "state"), root=sys.argv[3])))' \
+  "$ROOT" "$FLEET_MAIN" "$FAILROOT") || fail "the fleet read failed with a failing reader: $fleet_out"
+fleet_unknown "$fleet_out" "read failed" "an agent whose read fails must read as unknown, not a lower count"
+pass "an agent whose read fails reads both fleet counts as unknown"
 
 printf 'all local voice records cases passed\n'
