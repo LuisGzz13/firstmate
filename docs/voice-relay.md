@@ -178,10 +178,20 @@ Two whole classes of record are excluded at every scope, and excluded by constru
 - **Free-form note bodies**, because they are written for someone with the whole
   file in front of them, and they are where commercial detail gets quoted.
 
-Only open work and this home's own runtime records are ever assembled.
+Only open work and this home's own runtime records are ever assembled, apart from two fleet counts that are integers only.
 A task keeps its runtime record until teardown, so the count of workers on deck
 and the states beside it still include one whose item is already done; both are a
 number and a state word, never anything written in a record.
+Those states are the last recorded event, which is history rather than a live check.
+
+The `fm_voice_records.py status` command, which the Beacon status button runs, also returns `fleet_working` and `fleet_stuck` at every scope.
+They count agents across this home and every registered local second mate home, the second mates themselves and this home's own firstmate session included, by their current state rather than their last event.
+`fleet_working` counts each agent that `bin/fm-crew-state.sh` reads as working now, plus each session that is mid-turn, so a busy second mate counts whatever its status log last said.
+`fleet_stuck` counts each agent that reads blocked or failed now; a declared pause, a decision waiting on the captain, and an idle session count toward neither.
+A remote or unreadable second mate home is skipped, and the read takes no lock, writes nothing, wakes nobody and reaches no other host.
+Every read runs at once under one four-second deadline, and an agent that has not answered by then counts toward neither.
+On the captain's Mac mini on 2026-10-14 the whole read took 2.0 to 2.5 seconds, nearly all of it the current-state read of the one second mate whose status log had grown past 1,500 lines.
+The spoken answer leaves both counts out, because it is read on every question.
 Verified against the captain's live records on 2026-08-21: every occurrence of
 the one customer identifier those records contain sits in finished work or a note
 body, so nothing a status answer can say names a customer.

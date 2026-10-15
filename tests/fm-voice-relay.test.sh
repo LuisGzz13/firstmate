@@ -4808,4 +4808,155 @@ for mark in ("tool_use", "first_audio", "reply_end"):
 PY
 pass "a reply that arrives before the end of the clip is named as an unusable clock"
 
+# --- fleet counts: every local home, by current state ----------------------
+# The Beacon status button lights amber when anything in the fleet is working
+# and red when anything is stuck. Reading only this home's workers, by the last
+# line of each status log, showed green while a second mate's worker was busy.
+# These cases hold the fleet reading to current state across homes: a second
+# mate's own workers count, a busy session counts even when its log last says
+# "resolved", a declared pause or an open decision counts as neither, and a
+# remote or missing home is skipped without failing the read.
+command -v jq >/dev/null 2>&1 || { printf 'all voice relay cases passed (fleet counts skipped: no jq)\n'; exit 0; }
+FLEET="$TMP_ROOT/fleet"
+FLEET_MAIN="$FLEET/main"
+FLEET_MATE="$FLEET/mate"
+FLEET_BIN="$FLEET/bin"
+FLEET_AGENTS="$FLEET/agents"
+FLEET_SSH_LOG="$FLEET/ssh.log"
+mkdir -p "$FLEET_MAIN/data" "$FLEET_MAIN/state" "$FLEET_MATE/data" "$FLEET_MATE/state" "$FLEET_BIN"
+
+# herdr answers every pane as present and running a claude in the foreground;
+# each pane's agent_status comes from $FLEET_AGENTS ("<pane> <status>" lines).
+cat > "$FLEET_BIN/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+pane_status() {
+  awk -v p="$1" '$1 == p { s = $2 } END { print s }' "$FM_FAKE_FLEET_AGENTS" 2>/dev/null
+}
+case "${1:-} ${2:-}" in
+  "status --json") printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n' ;;
+  "pane get") printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "${3:-}" ;;
+  "pane read") printf 'all quiet\n> \n' ;;
+  "pane process-info")
+    printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"x","shell_pid":%s,"foreground_process_group_id":424242,"foreground_processes":[{"pid":424242,"name":"claude","argv0":"claude"}]}}}\n' "$PPID" ;;
+  "agent get")
+    status=$(pane_status "${3:-}")
+    [ -n "$status" ] || exit 1
+    printf '{"result":{"agent":{"agent_status":"%s"}}}\n' "$status" ;;
+esac
+exit 0
+SH
+# No validation run exists for any fixture task, and the daemon answers up.
+cat > "$FLEET_BIN/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  daemon) printf 'daemon running (pid 4242)\n' ;;
+esac
+exit 0
+SH
+# A remote home is never contacted: any ssh attempt is recorded and fails.
+cat > "$FLEET_BIN/ssh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_FAKE_FLEET_SSH_LOG"
+exit 255
+SH
+chmod +x "$FLEET_BIN/herdr" "$FLEET_BIN/no-mistakes" "$FLEET_BIN/ssh"
+
+# A worker carries the semantic busy record its Claude hooks keep, written here
+# through the record's one writer exactly as a hook would write it.
+fleet_worker() {  # <home> <id> <pane> <busy|idle> <status-line>
+  local wt="$FLEET/wt/$2" gen
+  mkdir -p "$wt"
+  git -C "$wt" init -q -b "fm/$2" 2>/dev/null || { git -C "$wt" init -q && git -C "$wt" checkout -q -b "fm/$2"; }
+  fm_write_meta "$1/state/$2.meta" "window=default:$3" "worktree=$wt" "kind=ship" \
+    "mode=local-only" "backend=herdr" "harness=claude"
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$1/state" "$2")
+  "$ROOT/bin/fm-busy-event.sh" apply "$1/state" "$2" "$4" --gen "$gen" \
+    --source claude-hook --event fixture >/dev/null
+  printf '%s\n' "$5" > "$1/state/$2.status"
+  printf '%s idle\n' "$3" >> "$FLEET_AGENTS"
+}
+
+: > "$FLEET_AGENTS"
+# Mid-turn after an answered decision: the log's last line is "resolved", and
+# only the current state says this worker is working.
+fleet_worker "$FLEET_MATE" sw-work wA:p1 busy "needs-decision [at=1792000000] [key=pin]: which pin"
+printf '%s\n' "resolved [at=1792000100] [key=pin]: pin 4" >> "$FLEET_MATE/state/sw-work.status"
+fleet_worker "$FLEET_MATE" sw-block wB:p1 idle "blocked [at=1792000000]: the board will not enumerate over USB"
+fleet_worker "$FLEET_MATE" sw-pause wC:p1 idle "paused [at=1792000000]: waiting on CI until 2099-01-01T00:00Z"
+fleet_worker "$FLEET_MATE" sw-ask wD:p1 idle "needs-decision [at=1792000000] [key=shape]: which payload shape"
+fleet_worker "$FLEET_MAIN" mw-pause wE:p1 idle "paused [at=1792000000]: waiting on the captain's hardware"
+
+# The second mate itself: its routed log last says "resolved", the shape the
+# last-line reading took for not working, while its session is mid-turn.
+fm_write_secondmate_meta "$FLEET_MAIN/state/mate.meta" "$FLEET_MATE" default:wS:p1 starklab claude
+printf 'backend=herdr\n' >> "$FLEET_MAIN/state/mate.meta"
+printf '%s\n' "needs-decision [at=1792000000] [key=ask]: which colorway" \
+  "resolved [at=1792000100] [key=ask]: green idle" > "$FLEET_MAIN/state/mate.status"
+printf 'wS:p1 working\n' >> "$FLEET_AGENTS"
+# A remote second mate, whose record names its host: skipped, never contacted.
+fm_write_secondmate_meta "$FLEET_MAIN/state/far.meta" "/srv/far/home" default:wF:p1 other claude
+printf 'remote_host=far.example\nbackend=herdr\n' >> "$FLEET_MAIN/state/far.meta"
+printf 'working [at=1792000000]: on the far host\n' > "$FLEET_MAIN/state/far.status"
+cat > "$FLEET_MAIN/data/secondmates.md" <<EOF
+- mate - Own the lab. (home: $FLEET_MATE; scope: the lab; projects: starklab; added 2026-10-14)
+- far - Own the far work. (host: far.example; root: /srv/far; home: /srv/far/home; scope: far work; projects: other; added 2026-10-14)
+- gone - Own nothing now. (home: $FLEET/missing; scope: nothing; projects: none; added 2026-10-14)
+EOF
+
+fleet_read() {  # [scope]
+  PATH="$FLEET_BIN:$PATH" FM_FAKE_FLEET_AGENTS="$FLEET_AGENTS" FM_FAKE_FLEET_SSH_LOG="$FLEET_SSH_LOG" \
+    python3 "$ROOT/bin/fm_voice_records.py" status --home "$FLEET_MAIN" --scope "${1:-counts}"
+}
+fleet_field() {  # <json> <field>
+  printf '%s' "$1" | python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "$2"
+}
+set_pane() {  # <pane> <status>
+  awk -v p="$1" -v s="$2" '$1 == p { $2 = s } { print }' "$FLEET_AGENTS" > "$FLEET_AGENTS.new"
+  mv "$FLEET_AGENTS.new" "$FLEET_AGENTS"
+}
+
+fleet_out=$(fleet_read) || fail "the fleet read failed: $fleet_out"
+assert_equals 2 "$(fleet_field "$fleet_out" fleet_working)" \
+  "the second mate's working worker and its busy session should both count as working"
+assert_equals 1 "$(fleet_field "$fleet_out" fleet_stuck)" \
+  "the second mate's blocked worker should count as stuck"
+for id in sw-work sw-block sw-pause sw-ask mw-pause mate far; do
+  assert_not_contains "$fleet_out" "$id" "the counts scope must not name $id"
+done
+[ ! -s "$FLEET_SSH_LOG" ] || fail "the fleet read contacted a remote host: $(cat "$FLEET_SSH_LOG")"
+pass "fleet counts read every local home by current state, and skip the remote and missing ones"
+
+set_pane wS:p1 idle
+fleet_out=$(fleet_read full) || fail "the fleet read failed: $fleet_out"
+assert_equals 1 "$(fleet_field "$fleet_out" fleet_working)" \
+  "an idle second mate whose log says resolved is not working"
+assert_equals 1 "$(fleet_field "$fleet_out" fleet_stuck)" \
+  "the full scope carries the same stuck count"
+pass "an idle second mate is not working, and a pause or an open decision is neither"
+
+# The primary firstmate session counts while it is mid-turn: the session-lock
+# holder's own pane, discovered from its environment, is busy.
+if standin=$(fm_agent_standin "$FLEET/standin"); then
+  cp "$standin" "$FLEET/standin/claude" 2>/dev/null || ln -sf "$standin" "$FLEET/standin/claude"
+  HERDR_ENV=1 HERDR_PANE_ID=wM:p1 HERDR_SESSION=default "$FLEET/standin/claude" 60 >/dev/null 2>&1 &
+  primary_pid=$!
+  sleep 0.2
+  printf '%s\n' "$primary_pid" > "$FLEET_MAIN/state/.lock"
+  printf 'wM:p1 working\n' >> "$FLEET_AGENTS"
+  fleet_out=$(fleet_read) || fail "the fleet read failed: $fleet_out"
+  primary_busy=$(fleet_field "$fleet_out" fleet_working)
+  set_pane wM:p1 idle
+  fleet_out=$(fleet_read) || fail "the fleet read failed: $fleet_out"
+  primary_idle=$(fleet_field "$fleet_out" fleet_working)
+  kill "$primary_pid" 2>/dev/null || true
+  wait "$primary_pid" 2>/dev/null || true
+  rm -f "$FLEET_MAIN/state/.lock"
+  assert_equals 2 "$primary_busy" "a mid-turn primary session should count as working"
+  assert_equals 1 "$primary_idle" "an idle primary session is not working"
+  pass "the primary firstmate session counts as working only while its pane is busy"
+else
+  pass "primary session case skipped: no stand-in process survives a harness name here"
+fi
+
 printf 'all voice relay cases passed\n'

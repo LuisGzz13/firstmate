@@ -15,13 +15,15 @@ not filtered at the end:
   for a reader with the whole file in front of them, and they are where
   commercial detail gets quoted.
 
-Only open task lines and this home's own runtime records are ever assembled.
-That is a confidentiality boundary as much as a brevity one. Verified on the
-captain's live records on 2026-08-21: every occurrence of the one engagement
-identifier those records contain sits in Done history or a note body, so
-nothing in a full status answer named a customer. tests/fm-voice-relay.test.sh
-holds that boundary as an executable check, so widening the reader later fails
-the test rather than quietly widening what is sent.
+Only open task lines and this home's own runtime records are ever assembled,
+apart from the two fleet counts below, which are integers and carry nothing
+written in any record. That is a confidentiality boundary as much as a brevity
+one. Verified on the captain's live records on 2026-08-21: every occurrence of
+the one engagement identifier those records contain sits in Done history or a
+note body, so nothing in a full status answer named a customer.
+tests/fm-voice-relay.test.sh holds that boundary as an executable check, so
+widening the reader later fails the test rather than quietly widening what is
+sent.
 
 Runtime records outlive the work they describe: a task keeps its state/<id>.meta
 until teardown removes it, which happens separately from marking the item done.
@@ -79,6 +81,17 @@ answer. The verb is folded through the closed STATE_VERBS vocabulary below, and
 anything outside it becomes "note": a status line is free text, and this verb is
 the only thing derived from a record that a counts-scope answer says out loud.
 
+FLEET COUNTS. The `status` command, which the Beacon status button runs, adds
+fleet_working and fleet_stuck: how many agents across this home and every
+registered local second mate home are working now, and how many are blocked or
+failed now. They read CURRENT state, not the last event: each task through
+bin/fm-crew-state.sh, a second mate's session and this home's primary session
+through their busy verdicts, so a mid-turn session counts as working whatever its
+log last said, and a declared pause, a decision waiting or an idle session counts
+as neither. bin/fm-voice-fleet-states.sh owns each read; fleet_activity below runs
+them together under one deadline. The spoken answer leaves them out, because it
+is read on every question and the current-state read is the slow one.
+
 bin/fm-inbox.sh `status` is the human rendering of the same records and stays
 the owner of that. This module exists because a spoken answer needs a machine
 shape and a read scope that the human rendering has no reason to carry.
@@ -96,8 +109,10 @@ import datetime
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
+import time
 
 SCOPE_COUNTS = "counts"
 SCOPE_FULL = "full"
@@ -150,6 +165,16 @@ _VERB_SHAPE = re.compile(r"^[a-z]+(?:-[a-z]+)*$")
 # and grow for the life of a task, while every spoken question reads one per
 # worker, so the read is bounded and seeks rather than scanning from the top.
 STATUS_TAIL_BYTES = 8192
+
+# The fleet counts. Current states are bin/fm-crew-state.sh's words, and a
+# session is busy on bin/fm-busy-lib.sh's word: a declared pause, a captain
+# hold, a decision waiting (parked) and an idle session are none of these.
+# One deadline covers every read in the fleet together, inside the Beacon's
+# own five-second reader timeout.
+FLEET_WORKING_STATE = "working"
+FLEET_STUCK_STATES = ("blocked", "failed")
+FLEET_BUSY_SESSION = "busy"
+FLEET_BUDGET_SECONDS = 4.0
 
 
 class RecordError(Exception):
@@ -389,8 +414,98 @@ def _workers(state_dir):
     return out
 
 
-def fleet_status(home=None, scope=None):
-    """Return the status answer the voice agent is allowed to give."""
+def _fleet_jobs(home, helper):
+    """Return the (argv, env) reads that together cover the whole local fleet.
+
+    This home's primary session, every task recorded here (its second mates
+    included), and every task recorded in each local second mate's own home.
+    A second mate home is read with its own state directory, so an override
+    meant for this home never redirects the read of another.
+    """
+    ambient = dict(os.environ)
+    elsewhere = {k: v for k, v in ambient.items()
+                 if k not in ("FM_STATE_OVERRIDE", "FM_DATA_OVERRIDE")}
+    jobs = [([helper, "primary", home], ambient)]
+    homes = [(home, state_dir(home), ambient)]
+    try:
+        listed = subprocess.run(
+            [helper, "homes", home], stdin=subprocess.DEVNULL, env=ambient,
+            capture_output=True, text=True, timeout=FLEET_BUDGET_SECONDS,
+            check=False).stdout.splitlines()
+    except (OSError, subprocess.SubprocessError):
+        listed = []
+    seen = {os.path.realpath(home)}
+    for other in listed:
+        other = other.strip()
+        if not other or os.path.realpath(other) in seen:
+            continue
+        seen.add(os.path.realpath(other))
+        homes.append((other, os.path.join(other, "state"), elsewhere))
+    for each, state, env in homes:
+        try:
+            names = sorted(n for n in os.listdir(state) if n.endswith(".meta"))
+        except OSError:
+            continue
+        for name in names:
+            jobs.append(([helper, "agent", each, name[: -len(".meta")]], env))
+    return jobs
+
+
+def fleet_activity(home=None, root=None):
+    """Return fleet_working and fleet_stuck across every local home.
+
+    Every read runs at once and the whole set shares one deadline, because the
+    caller is a button press: a read that has not answered by then counts
+    toward neither figure rather than holding the answer back. Nothing here
+    takes a lock, writes a record, wakes firstmate or reaches the network; see
+    bin/fm-voice-fleet-states.sh, which owns what each read asks.
+    """
+    home = home or default_home()
+    root = root or os.path.dirname(os.path.abspath(__file__))
+    helper = os.path.join(root, "fm-voice-fleet-states.sh")
+    working = stuck = 0
+    if not os.access(helper, os.X_OK):
+        return {"fleet_working": working, "fleet_stuck": stuck}
+    running = []
+    for argv, env in _fleet_jobs(home, helper):
+        try:
+            # Its own process group, so a read past the deadline is stopped
+            # whole rather than leaving its current-state read running on.
+            running.append(subprocess.Popen(
+                argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, env=env, text=True,
+                start_new_session=True))
+        except OSError:
+            continue
+    deadline = time.monotonic() + FLEET_BUDGET_SECONDS
+    for proc in running:
+        try:
+            out, _ = proc.communicate(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                proc.kill()
+            proc.communicate()
+            continue
+        words = (out or "").split()
+        state = words[0] if words else "unknown"
+        session = words[1] if len(words) > 1 else "-"
+        if state == FLEET_WORKING_STATE or session == FLEET_BUSY_SESSION:
+            working += 1
+        if state in FLEET_STUCK_STATES:
+            stuck += 1
+    return {"fleet_working": working, "fleet_stuck": stuck}
+
+
+def fleet_status(home=None, scope=None, fleet=False):
+    """Return the status answer the voice agent is allowed to give.
+
+    fleet=True adds fleet_working and fleet_stuck (see fleet_activity). It is
+    off here because the spoken answer is read on every question and the fleet
+    read costs a current-state read per agent; the `status` command, which the
+    Beacon status button runs, turns it on.
+    """
     home = home or default_home()
     scope = scope or read_scope(home)
     if scope not in SCOPES:
@@ -454,6 +569,8 @@ def fleet_status(home=None, scope=None):
         "open_pull_requests": len(with_pr),
         "captain_notes_waiting": waiting,
     }
+    if fleet:
+        answer.update(fleet_activity(home))
     if scope == SCOPE_COUNTS:
         answer["detail"] = (
             "Identifiers, titles and pull request links are withheld at this "
@@ -593,7 +710,7 @@ def main(argv):
     args = parser.parse_args(argv)
     try:
         if args.command == "status":
-            result = fleet_status(home=args.home, scope=args.scope)
+            result = fleet_status(home=args.home, scope=args.scope, fleet=True)
         else:
             result = queue_request(" ".join(args.text), home=args.home)
     except RecordError as exc:
