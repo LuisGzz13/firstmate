@@ -6,7 +6,10 @@
 # question, so the counts cannot drift from what supervision reads:
 #   - the registered second mate homes from bin/fm-secondmate-registry-lib.sh,
 #   - a task's current state from bin/fm-crew-state.sh, never from the last
-#     line of its status log,
+#     line of its status log; FM_OPEN_DECISIONS_CURSOR_PEEK=1 lets its fold of
+#     open decisions answer from the cursor that home's own drain keeps
+#     (bin/fm-classify-lib.sh), so a log grown over weeks is not refolded from
+#     its first byte on every button press, and nothing is written,
 #   - a second mate session's busy verdict from bin/fm-busy-lib.sh
 #     (fm_busy_classify_meta), the semantic busy-state contract,
 #   - the primary session's process from bin/fm-session-lock-lib.sh
@@ -85,7 +88,7 @@ agent() {  # <home> <id>
     printf 'unknown -\n'
     return 0
   fi
-  line=$(FM_HOME=$home FM_STATE_OVERRIDE=$state FM_CREW_STATE_NO_FORGE=1 \
+  line=$(FM_HOME=$home FM_STATE_OVERRIDE=$state FM_CREW_STATE_NO_FORGE=1 FM_OPEN_DECISIONS_CURSOR_PEEK=1 \
     "$SCRIPT_DIR/fm-crew-state.sh" "$id" 2>/dev/null </dev/null || true)
   word=${line#state: }
   word=${word%% *}

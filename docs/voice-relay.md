@@ -190,7 +190,8 @@ They count agents across this home and every registered local second mate home, 
 `fleet_stuck` counts each agent that reads blocked or failed now; a declared pause, a decision waiting on the captain, and an idle session count toward neither.
 A remote or unreadable second mate home is skipped, and the read takes no lock, writes nothing, wakes nobody and reaches no other host.
 Every read runs at once under one four-second deadline, and an agent that has not answered by then counts toward neither.
-On the captain's Mac mini on 2026-10-14 the whole read took 2.0 to 2.5 seconds, nearly all of it the current-state read of the one second mate whose status log had grown past 1,500 lines.
+A long status log is read from the open-decisions cursor its home's own drain keeps, plus only the lines appended since, so its length does not set the cost.
+On the captain's Mac mini on 2026-10-14, with twelve agents across three homes, the whole read took 0.50 to 0.53 seconds.
 The spoken answer leaves both counts out, because it is read on every question.
 Verified against the captain's live records on 2026-08-21: every occurrence of
 the one customer identifier those records contain sits in finished work or a note

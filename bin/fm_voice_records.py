@@ -414,19 +414,32 @@ def _workers(state_dir):
     return out
 
 
+def _home_jobs(helper, home, state, env):
+    """Yield one agent read per task recorded in <state>."""
+    try:
+        names = sorted(n for n in os.listdir(state) if n.endswith(".meta"))
+    except OSError:
+        return
+    for name in names:
+        yield [helper, "agent", home, name[: -len(".meta")]], env
+
+
 def _fleet_jobs(home, helper):
-    """Return the (argv, env) reads that together cover the whole local fleet.
+    """Yield the (argv, env) reads that together cover the whole local fleet.
 
     This home's primary session, every task recorded here (its second mates
     included), and every task recorded in each local second mate's own home.
-    A second mate home is read with its own state directory, so an override
-    meant for this home never redirects the read of another.
+    This home's reads come first, so they are already running while the second
+    mate homes are listed. A second mate home is read with its own state
+    directory, so an override meant for this home never redirects the read of
+    another.
     """
     ambient = dict(os.environ)
     elsewhere = {k: v for k, v in ambient.items()
                  if k not in ("FM_STATE_OVERRIDE", "FM_DATA_OVERRIDE")}
-    jobs = [([helper, "primary", home], ambient)]
-    homes = [(home, state_dir(home), ambient)]
+    yield [helper, "primary", home], ambient
+    for job in _home_jobs(helper, home, state_dir(home), ambient):
+        yield job
     try:
         listed = subprocess.run(
             [helper, "homes", home], stdin=subprocess.DEVNULL, env=ambient,
@@ -440,15 +453,8 @@ def _fleet_jobs(home, helper):
         if not other or os.path.realpath(other) in seen:
             continue
         seen.add(os.path.realpath(other))
-        homes.append((other, os.path.join(other, "state"), elsewhere))
-    for each, state, env in homes:
-        try:
-            names = sorted(n for n in os.listdir(state) if n.endswith(".meta"))
-        except OSError:
-            continue
-        for name in names:
-            jobs.append(([helper, "agent", each, name[: -len(".meta")]], env))
-    return jobs
+        for job in _home_jobs(helper, other, os.path.join(other, "state"), elsewhere):
+            yield job
 
 
 def fleet_activity(home=None, root=None):

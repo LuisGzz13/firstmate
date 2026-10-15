@@ -4959,4 +4959,34 @@ else
   pass "primary session case skipped: no stand-in process survives a harness name here"
 fi
 
+# A long-lived log must not make a button press slow. A second mate's worker
+# raised a blocker long ago and has appended thousands of lines since; its
+# home's drain keeps the incremental open-decisions cursor, as every drain
+# does. The fleet read answers from that cursor plus only the bytes appended
+# after it, still finds the buried blocker, and leaves the cursor untouched.
+fleet_worker "$FLEET_MATE" sw-long wG:p1 idle "blocked [at=1792000000] [key=usb]: the bench port is gone"
+i=0
+while [ "$i" -lt 3000 ]; do
+  printf 'working [at=1792000001]: routine progress line %04d on a long-running task\n' "$i"
+  i=$((i + 1))
+done >> "$FLEET_MATE/state/sw-long.status"
+FM_HOME="$FLEET_MATE" bash -c '. "$1/bin/fm-classify-lib.sh"; status_open_decisions_incremental "$2" >/dev/null' \
+  _ "$ROOT" "$FLEET_MATE/state/sw-long.status"
+long_cursor="$FLEET_MATE/state/.sw-long.open-decisions-cursor"
+[ -s "$long_cursor" ] || fail "the incremental fold did not leave a cursor to read from"
+long_before=$(LC_ALL=C wc -c < "$FLEET_MATE/state/sw-long.status" | tr -d '[:space:]')
+printf 'working [at=1792000002]: one more line after the drain\n' >> "$FLEET_MATE/state/sw-long.status"
+long_after=$(LC_ALL=C wc -c < "$FLEET_MATE/state/sw-long.status" | tr -d '[:space:]')
+cursor_sum=$(cksum < "$long_cursor")
+long_probe="$FLEET/long.probe"
+: > "$long_probe"
+fleet_out=$(FM_OPEN_DECISIONS_READ_PROBE="$long_probe" fleet_read) || fail "the fleet read failed: $fleet_out"
+assert_equals 2 "$(fleet_field "$fleet_out" fleet_stuck)" \
+  "a blocker buried under thousands of later lines must still count as stuck"
+long_folded=$(grep -F "$(printf '%s\t' "$FLEET_MATE/state/sw-long.status")" "$long_probe" | cut -f2 | sort -u)
+assert_equals "$((long_after - long_before))" "$long_folded" \
+  "the long log should be folded from the cursor on, never from its first byte"
+assert_equals "$cursor_sum" "$(cksum < "$long_cursor")" "the fleet read must not rewrite the cursor"
+pass "a long status log is read from its existing cursor, bounded by new appends, without a write"
+
 printf 'all voice relay cases passed\n'
