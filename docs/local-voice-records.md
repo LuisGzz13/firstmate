@@ -18,8 +18,10 @@ They count agents across this home and every registered local second mate home, 
 `fleet_stuck` counts each agent that reads blocked or failed now; a declared pause, a decision waiting on the captain, and an idle session count toward neither.
 A remote or unreadable second mate home is skipped, and the read takes no lock, writes nothing, wakes nobody and reaches no other host.
 Every read runs at once under one four-second deadline.
-The counts are numbers only when every agent was seen: when any agent's read misses that deadline or fails, or a live session the counts depend on cannot be read at all - `herdr` is not on the reader's `PATH`, or a `herdr` call fails - both are JSON `null` rather than a lower number, and `fleet_unknown_reason` carries a short reason naming the cause; a consumer treats that as unknown, never idle.
-This holds even when a stuck agent was already seen, so one rule covers both counts and an unseen agent can never turn a count into a false green.
+A count is never a lower number standing in for an agent that went unseen; it is JSON `null` instead, and `fleet_unknown_reason` carries a short reason naming the cause.
+When a live session the counts depend on cannot be read at all - `herdr` is not on the reader's `PATH`, or a `herdr` call fails - both counts are `null`.
+When any agent's read misses the deadline or fails, `fleet_working` is `null`; `fleet_stuck` is the real count of stuck agents the other reads saw when that is at least 1, because red beats unknown, and `null` when none was seen.
+So `fleet_stuck` can be a number while `fleet_working` is `null`, never the reverse, and a consumer reads them in the Beacon's order: `fleet_stuck` of 1 or more is red, then either count `null` is unknown (never idle), then `fleet_working` of 1 or more is amber, and only two zeros are green.
 The missing tool is detected before any `herdr` call, so that answer returns at once, and `herdr` is looked for only on the `PATH` the caller gives, so a caller under launchd's bare `PATH` must supply one that includes it.
 `fleet_unknown_reason` is absent whenever both counts are numbers.
 A long status log is read from the open-decisions cursor its home's own drain keeps, plus only the lines appended since, so its length does not set the cost.

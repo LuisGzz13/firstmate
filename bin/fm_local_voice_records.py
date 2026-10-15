@@ -21,11 +21,12 @@ an idle session counts as neither. bin/fm-local-voice-fleet-states.sh owns each
 read; fleet_activity below runs them together under one deadline. When a live
 session they depend on cannot be read at all - herdr not on this process's
 PATH, or a herdr call failing - both are null and fleet_unknown_reason says
-why, because a zero there would read as idle. The same holds when any one
-read misses the deadline or fails: the counts would silently leave that agent
-out, so they are unknown rather than low. The spoken answer leaves them
-out, because it is read on every question and the current-state read is the
-slow one.
+why, because a zero there would read as idle. When any one read misses the
+deadline or fails, the counts would silently leave that agent out, so
+fleet_working is null with the reason, and fleet_stuck is null too unless a
+stuck agent was seen, which keeps it a real number because red beats unknown.
+The spoken answer leaves them out, because it is read on every question and
+the current-state read is the slow one.
 
 The two counts are integers and carry nothing written in any record, so they
 are the one exception to bin/fm_voice_records.py's rule that only open task
@@ -47,6 +48,8 @@ FLEET_WORKING_STATE = "working"
 FLEET_STUCK_STATES = ("blocked", "failed")
 FLEET_BUSY_SESSION = "busy"
 FLEET_BUDGET_SECONDS = 4.0
+# How long an already-exited read may take to hand over its answer.
+FLEET_COLLECT_SECONDS = 0.1
 # A read that could not see a live session at all, and why. Any one of them
 # makes both counts unknown: the rest of the fleet cannot vouch for the agent
 # that went unseen.
@@ -54,7 +57,8 @@ FLEET_UNREADABLE = {
     "no-herdr": "herdr is not on PATH, so live sessions cannot be read",
     "unreadable": "a herdr read failed, so live sessions cannot be read",
 }
-# An agent whose read gave no answer at all is unseen the same way.
+# An agent whose read gave no answer at all is unseen too, but the other reads
+# still count: a stuck agent they saw keeps fleet_stuck a real number.
 FLEET_LATE = ("an agent's state read missed the %g s deadline, so the counts are incomplete"
               % FLEET_BUDGET_SECONDS)
 FLEET_FAILED = "an agent's state read failed, so the counts are incomplete"
@@ -141,12 +145,17 @@ def fleet_activity(home, state_dir, root=None):
 
     Every read runs at once and the whole set shares one deadline, because the
     caller is a button press: a read that has not answered by then is stopped
-    rather than holding the answer back. Such a late read (FLEET_LATE), a read
-    that could not start or gave no answer (FLEET_FAILED), and a read that
-    reports its live session unreadable (FLEET_UNREADABLE) each make both
-    figures None, with fleet_unknown_reason, and stop the reads still running:
-    a count missing one agent could read as idle while that agent works or is
-    stuck.
+    rather than holding the answer back. A count missing one agent could read
+    as idle while that agent works or is stuck, so no figure is ever a lower
+    number standing in for an unseen agent:
+    - A late read (FLEET_LATE) or one that could not start or gave no answer
+      (FLEET_FAILED) makes fleet_working None, with fleet_unknown_reason. The
+      other reads still finish, and fleet_stuck is the real count when they
+      saw at least one stuck agent, because red beats unknown; with none seen
+      it is None too.
+    - A read that reports its live session unreadable (FLEET_UNREADABLE)
+      makes both figures None, with fleet_unknown_reason, and stops the reads
+      still running, since none of them can see a live session either.
     Nothing here takes a lock, writes a record, wakes firstmate or reaches the
     network; see bin/fm-local-voice-fleet-states.sh, which owns what each read
     asks.
@@ -157,7 +166,7 @@ def fleet_activity(home, state_dir, root=None):
     if not os.access(helper, os.X_OK):
         return {"fleet_working": working, "fleet_stuck": stuck}
     running = []
-    reason = None
+    incomplete = unseen = None
     for argv, env in _fleet_jobs(home, helper, state_dir):
         try:
             # Its own process group, so a read past the deadline is stopped
@@ -167,36 +176,43 @@ def fleet_activity(home, state_dir, root=None):
                 stderr=subprocess.DEVNULL, env=env, text=True,
                 start_new_session=True))
         except OSError:
-            reason = reason or FLEET_FAILED
+            incomplete = incomplete or FLEET_FAILED
     deadline = time.monotonic() + FLEET_BUDGET_SECONDS
     for proc in running:
         try:
-            if reason is not None:
+            if unseen is not None:
                 raise subprocess.TimeoutExpired(proc.args, 0)
-            out, _ = proc.communicate(timeout=max(0.0, deadline - time.monotonic()))
+            remaining = deadline - time.monotonic()
+            # A read that already exited is collected even past the deadline,
+            # so an earlier late read does not hide its answer.
+            if proc.poll() is not None:
+                remaining = max(remaining, FLEET_COLLECT_SECONDS)
+            out, _ = proc.communicate(timeout=max(0.0, remaining))
         except subprocess.TimeoutExpired:
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
             except OSError:
                 proc.kill()
             proc.communicate()
-            reason = reason or FLEET_LATE
+            incomplete = incomplete or FLEET_LATE
             continue
         words = (out or "").split()
         if proc.returncode != 0 or not words:
-            reason = FLEET_FAILED
+            incomplete = incomplete or FLEET_FAILED
             continue
         state = words[0]
         session = words[1] if len(words) > 1 else "-"
         unseen = FLEET_UNREADABLE.get(state) or FLEET_UNREADABLE.get(session)
         if unseen:
-            reason = unseen
             continue
         if state == FLEET_WORKING_STATE or session == FLEET_BUSY_SESSION:
             working += 1
         if state in FLEET_STUCK_STATES:
             stuck += 1
-    if reason is not None:
+    if unseen is not None:
         return {"fleet_working": None, "fleet_stuck": None,
-                "fleet_unknown_reason": reason}
+                "fleet_unknown_reason": unseen}
+    if incomplete is not None:
+        return {"fleet_working": None, "fleet_stuck": stuck or None,
+                "fleet_unknown_reason": incomplete}
     return {"fleet_working": working, "fleet_stuck": stuck}

@@ -341,39 +341,71 @@ pass "a failing herdr call reads both fleet counts as unknown"
 
 # One agent's read misses the deadline, as under load at background priority:
 # the busy second mate worker's herdr calls hang. Dropping it from both counts
-# lowered fleet_working and could read a false green; the counts must read as
-# unknown instead, while the read still returns soon after the deadline.
+# lowered fleet_working and could read a false green. fleet_working must read
+# as unknown instead, while the read still returns soon after the deadline.
+# The second mate's blocked workers were seen, so fleet_stuck stays their real
+# count: red beats unknown.
+fleet_partial() {  # <json> <reason-fragment> <stuck> <label>
+  printf '%s' "$1" | python3 -c '
+import json, sys
+got = json.load(sys.stdin)
+ok = (got.get("fleet_working", 0) is None and got.get("fleet_stuck") == int(sys.argv[2])
+      and sys.argv[1] in (got.get("fleet_unknown_reason") or ""))
+sys.exit(0 if ok else 1)' "$2" "$3" || fail "$4: $1"
+}
 set_pane wS:p1 working
 fleet_out=$(fleet_read) || fail "the fleet read failed: $fleet_out"
 assert_equals 2 "$(fleet_field "$fleet_out" fleet_working)" "the fixture should start with two working"
+assert_equals 2 "$(fleet_field "$fleet_out" fleet_stuck)" "the fixture should start with two stuck"
 started=$(python3 -c 'import time; print(time.monotonic())')
 fleet_out=$(FLEET_SLOW=wA:p1 fleet_read) || fail "the fleet read failed with a slow agent: $fleet_out"
 slow_secs=$(python3 -c 'import sys, time; print("%.2f" % (time.monotonic() - float(sys.argv[1])))' "$started")
-fleet_unknown "$fleet_out" "missed the" "an agent past the deadline must read as unknown, not a lower count"
+fleet_partial "$fleet_out" "missed the" 2 \
+  "an agent past the deadline must leave working unknown and keep the stuck agents seen"
 python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 6.0 else 1)' "$slow_secs" \
   || fail "a slow agent must not hold the read past the deadline: ${slow_secs}s"
-pass "an agent whose read misses the deadline reads both fleet counts as unknown"
+pass "an agent past the deadline leaves working unknown while the stuck agents seen still show"
 
-# One agent's read fails outright, with no answer: the reader crashed. Its
-# agent is unseen just as a late one is, so the counts must not drop it.
-FAILROOT="$FLEET/failroot"
-mkdir -p "$FAILROOT"
-cat > "$FAILROOT/fm-local-voice-fleet-states.sh" <<SH
+# A reader that hangs or fails for chosen agents ($FM_FAKE_READ_SLOW and
+# $FM_FAKE_READ_FAIL, space-separated task ids) and answers for the rest.
+FAKEROOT="$FLEET/fakeroot"
+mkdir -p "$FAKEROOT"
+cat > "$FAKEROOT/fm-local-voice-fleet-states.sh" <<SH
 #!/usr/bin/env bash
-case "\$1 \${3:-}" in
-  "agent sw-work") exit 1 ;;
-esac
+if [ "\$1" = agent ]; then
+  case " \${FM_FAKE_READ_SLOW:-} " in *" \$3 "*) sleep 30 ;; esac
+  case " \${FM_FAKE_READ_FAIL:-} " in *" \$3 "*) exit 1 ;; esac
+fi
 exec "$ROOT/bin/fm-local-voice-fleet-states.sh" "\$@"
 SH
-chmod +x "$FAILROOT/fm-local-voice-fleet-states.sh"
-fleet_out=$(PATH="$FLEET_BIN:$PATH" FM_FAKE_FLEET_AGENTS="$FLEET_AGENTS" FM_FAKE_FLEET_SSH_LOG="$FLEET_SSH_LOG" \
-  python3 -c '
+chmod +x "$FAKEROOT/fm-local-voice-fleet-states.sh"
+fake_read() {  # <slow-ids> <fail-ids>
+  PATH="$FLEET_BIN:$PATH" FM_FAKE_FLEET_AGENTS="$FLEET_AGENTS" FM_FAKE_FLEET_SSH_LOG="$FLEET_SSH_LOG" \
+    FM_FAKE_READ_SLOW="$1" FM_FAKE_READ_FAIL="$2" python3 -c '
 import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "bin"))
 import fm_local_voice_records as m
 print(json.dumps(m.fleet_activity(sys.argv[2], lambda h: os.path.join(h, "state"), root=sys.argv[3])))' \
-  "$ROOT" "$FLEET_MAIN" "$FAILROOT") || fail "the fleet read failed with a failing reader: $fleet_out"
-fleet_unknown "$fleet_out" "read failed" "an agent whose read fails must read as unknown, not a lower count"
-pass "an agent whose read fails reads both fleet counts as unknown"
+    "$ROOT" "$FLEET_MAIN" "$FAKEROOT"
+}
+
+# The late read comes before the stuck ones in read order: their answers,
+# already in by the deadline, must still be collected after it.
+fleet_out=$(fake_read "sw-ask" "") || fail "the fleet read failed with a slow agent: $fleet_out"
+fleet_partial "$fleet_out" "missed the" 2 "a late read must not hide the stuck agents read after it"
+
+# The unseen agents include every stuck one, so nothing seen is stuck: both
+# counts must read as unknown, never a green 0.
+fleet_out=$(fake_read "sw-work sw-block sw-long" "") || fail "the fleet read failed with slow agents: $fleet_out"
+fleet_unknown "$fleet_out" "missed the" "late reads with no stuck agent seen must read both counts as unknown"
+pass "late reads with no stuck agent seen read both fleet counts as unknown"
+
+# A read that fails outright, with no answer, is unseen just as a late one is.
+fleet_out=$(fake_read "" "sw-work") || fail "the fleet read failed with a failing reader: $fleet_out"
+fleet_partial "$fleet_out" "read failed" 2 \
+  "a failed read must leave working unknown and keep the stuck agents seen"
+fleet_out=$(fake_read "" "sw-work sw-block sw-long") || fail "the fleet read failed with failing readers: $fleet_out"
+fleet_unknown "$fleet_out" "read failed" "failed reads with no stuck agent seen must read both counts as unknown"
+pass "a failed read leaves working unknown, and stuck unknown too unless a stuck agent was seen"
 
 printf 'all local voice records cases passed\n'
